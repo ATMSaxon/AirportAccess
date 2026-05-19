@@ -178,17 +178,25 @@ def main(argv=None) -> int:
     summary["n_slices"] = int(len(rconf))
 
     # Static mask (A_static): default → global SDFQuery; opt-in → PrismIndex per slice.
-    prism_index = None
+    static_cache = None
     a_static = None
     if args.config_aware_static:
         prism_index = envelope.load_prism_index(args.airport)
         if prism_index is None:
             log.warning("--config-aware-static requested but PrismIndex unavailable; "
                         "falling back to global SDFQuery A_static.")
-    if prism_index is None:
+        else:
+            # Static-base + active-delta decomposition (per geometry-engineer's perf note):
+            # the baked sdf_static covers always-on surfaces, and per-slice we only
+            # evaluate the active approach/takeoff prism unions.
+            sdf_static = envelope.load_static_sdf(args.airport, grid)
+            static_cache = envelope.ConfigStaticCache(grid, prism_index, sdf_static=sdf_static)
+            log.info("config-aware A_static enabled (sdf_static %s)",
+                     "baked-in" if sdf_static is not None else "absent")
+    if static_cache is None:
         a_static = envelope.load_static_mask(args.airport, grid)
-    summary["a_static_available"] = a_static is not None or prism_index is not None
-    summary["a_static_mode"] = "prism_index" if prism_index is not None else (
+    summary["a_static_available"] = a_static is not None or static_cache is not None
+    summary["a_static_mode"] = "prism_index_cached" if static_cache is not None else (
         "sdf_query" if a_static is not None else "all_clear")
 
     # Build per-slice envelope masks.
@@ -207,10 +215,13 @@ def main(argv=None) -> int:
             departures_active=row["departures_active"] or [],
             weather=wx,
             a_static=a_static,
-            prism_index=prism_index,
+            static_cache=static_cache,
         )
         envelopes[row["slice_start"].isoformat()] = e_t
         slice_times.append(row["slice_start"])
+    if static_cache is not None:
+        summary["a_static_cache_stats"] = static_cache.stats
+        log.info("config-aware A_static cache: %s", static_cache.stats)
 
     env_path = out_dir / f"envelope_{args.window}.zarr"
     written = envelope.save_envelope_zarr(envelopes, env_path, grid, slice_times)

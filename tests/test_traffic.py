@@ -355,3 +355,193 @@ def test_envelope_combines_with_a_static(synthetic_airport):
     assert not e_t[50, 50, 5]
     # Some voxels still open in E_t (we haven't closed the whole world).
     assert e_t.any()
+
+
+class _StubPrismIndex:
+    """Minimal PrismIndex-shaped stub.
+
+    `sdf_at` returns +1 everywhere (clear) except for a small "protected"
+    region whose position depends on which runways are active. This lets us
+    assert that ``envelope_for_slice(prism_index=...)`` actually re-evaluates
+    A_static per slice from the active runways.
+    """
+
+    def __init__(self, grid):
+        self.grid = grid
+        self.calls = []
+
+    def sdf_at(self, x, y, z, active_arrivals=None, active_departures=None):
+        self.calls.append({
+            "active_arrivals": list(active_arrivals) if active_arrivals else [],
+            "active_departures": list(active_departures) if active_departures else [],
+        })
+        # Each active runway "consumes" a thin protected slab in +x at high alt.
+        out = np.ones_like(x, dtype=float)
+        arrivals = list(active_arrivals or [])
+        if "27R" in arrivals:
+            out[(x > 2000.0) & (x < 2500.0) & (z > 800.0)] = -1.0
+        if "27L" in arrivals:
+            out[(x < -2000.0) & (x > -2500.0) & (z > 800.0)] = -1.0
+        return out
+
+
+def test_envelope_prism_index_makes_a_static_config_aware(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    runway_ends = synthetic_airport["runway_ends"]
+    stub = _StubPrismIndex(grid)
+    wx = envelope.WeatherState(vis_sm=10.0, ceiling_ft=10000.0, flight_rule="VFR")
+
+    # Slice A: only 27R active → only the +x slab is protected.
+    e_a = envelope.envelope_for_slice(
+        grid, runway_ends,
+        arrivals_active=["27R"], departures_active=[],
+        weather=wx, prism_index=stub,
+    )
+    # Slice B: only 27L active → only the -x slab is protected.
+    e_b = envelope.envelope_for_slice(
+        grid, runway_ends,
+        arrivals_active=["27L"], departures_active=[],
+        weather=wx, prism_index=stub,
+    )
+
+    # PrismIndex.sdf_at was called once per slice with the right config.
+    assert len(stub.calls) == 2
+    assert stub.calls[0]["active_arrivals"] == ["27R"]
+    assert stub.calls[1]["active_arrivals"] == ["27L"]
+
+    # The two slices' envelopes must differ — proving A_static is slice-aware.
+    diff = e_a != e_b
+    assert diff.any(), "config-aware A_static should produce slice-dependent envelopes"
+
+    # And `a_static` is ignored when a prism_index is supplied (otherwise the
+    # caller would have had to remember to skip it).
+    nx, ny, nz = grid.shape
+    bogus_a = np.zeros((nx, ny, nz), dtype=bool)        # would zero out everything
+    e_c = envelope.envelope_for_slice(
+        grid, runway_ends,
+        arrivals_active=["27R"], departures_active=[],
+        weather=wx, a_static=bogus_a, prism_index=stub,
+    )
+    assert e_c.any(), "prism_index should override a_static"
+
+
+def test_envelope_static_mask_for_config_helper(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    stub = _StubPrismIndex(grid)
+    mask = envelope.static_mask_for_config(grid, stub,
+                                           arrivals_active=["27R"],
+                                           departures_active=[])
+    assert mask.dtype == bool
+    assert mask.shape == tuple(grid.shape)
+    # The stub carves a slab; the mask must reflect it (some False voxels).
+    assert mask.all() == False  # noqa: E712 — explicit `all()` check
+    assert mask.any()
+
+
+class _StubPrismIndexWithDelta:
+    """PrismIndex stub that exposes the active-delta API geometry-engineer
+    recommended (``distance_to_active_approach`` / ``distance_to_active_departure``)
+    so we can test the decomposition path explicitly.
+
+    Returns +1 everywhere except a slab per active runway (signed distance =
+    -1 inside the protected region, +1 outside).
+    """
+
+    def __init__(self, grid):
+        self.grid = grid
+        self.calls_sdf_at = 0
+        self.calls_delta = 0
+
+    def sdf_at(self, x, y, z, active_arrivals=None, active_departures=None):
+        self.calls_sdf_at += 1
+        return np.ones_like(x, dtype=float)
+
+    def distance_to_active_approach(self, x, y, z, active_arrivals=None):
+        self.calls_delta += 1
+        out = np.ones_like(x, dtype=float)
+        if active_arrivals and "27R" in list(active_arrivals):
+            out[(x > 2000.0) & (x < 2500.0)] = -1.0
+        return out
+
+    def distance_to_active_departure(self, x, y, z, active_departures=None):
+        self.calls_delta += 1
+        out = np.ones_like(x, dtype=float)
+        if active_departures and "09L" in list(active_departures):
+            out[(x < -2000.0) & (x > -2500.0)] = -1.0
+        return out
+
+
+def test_config_static_cache_decomposes_and_uses_baked_static(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    stub = _StubPrismIndexWithDelta(grid)
+    nx, ny, nz = grid.shape
+    # Baked sdf_static: clear (+1) everywhere except one obstacle voxel.
+    sdf_static = np.ones((nx, ny, nz), dtype=np.float32)
+    sdf_static[10, 10, 2] = -1.0
+    cache = envelope.ConfigStaticCache(grid, stub, sdf_static=sdf_static)
+
+    m = cache.mask_for(["27R"], ["09L"])
+    assert m.dtype == bool
+    # Active approach slab + active departure slab + baked obstacle all masked out.
+    assert not m[10, 10, 2], "baked-in static obstacle must persist via decomposition"
+    assert m.any() and not m.all()
+    # Delta API used; legacy sdf_at not called.
+    assert stub.calls_delta == 2          # one approach + one departure
+    assert stub.calls_sdf_at == 0
+
+
+def test_config_static_cache_hits_on_repeated_config(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    stub = _StubPrismIndexWithDelta(grid)
+    cache = envelope.ConfigStaticCache(grid, stub, sdf_static=None)
+
+    # Same config evaluated 5 times → 1 miss + 4 hits.
+    for _ in range(5):
+        cache.mask_for(["27R"], ["09L"])
+    assert cache.stats["misses"] == 1
+    assert cache.stats["hits"] == 4
+    assert cache.stats["unique_configs"] == 1
+
+    # A different config bumps misses by exactly 1.
+    cache.mask_for(["27L"], ["09R"])
+    assert cache.stats["misses"] == 2
+    assert cache.stats["unique_configs"] == 2
+
+    # Order of the same set of runways must collide on the cache key.
+    cache.mask_for(["09L", "27R"], [])              # different order than below
+    cache.mask_for(["27R", "09L"], [])
+    # Both are the same {09L, 27R} frozenset → one new entry, then a hit.
+    assert cache.stats["misses"] == 3
+    assert cache.stats["hits"] == 5
+
+    # Delta API was called only on misses (2 calls per miss: approach + departure).
+    assert stub.calls_delta == 2 * cache.stats["misses"]
+
+
+def test_config_static_cache_falls_back_to_sdf_at_when_no_delta_api(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    stub = _StubPrismIndex(grid)                     # the *original* stub, no delta API
+    cache = envelope.ConfigStaticCache(grid, stub, sdf_static=None)
+    m = cache.mask_for(["27R"], [])
+    assert m.shape == tuple(grid.shape)
+    # sdf_at was used because the stub doesn't expose the delta API.
+    assert len(stub.calls) == 1
+    assert stub.calls[0]["active_arrivals"] == ["27R"]
+
+
+def test_envelope_for_slice_with_static_cache(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    runway_ends = synthetic_airport["runway_ends"]
+    stub = _StubPrismIndexWithDelta(grid)
+    cache = envelope.ConfigStaticCache(grid, stub, sdf_static=None)
+    wx = envelope.WeatherState(vis_sm=10.0, ceiling_ft=10000.0, flight_rule="VFR")
+
+    e1 = envelope.envelope_for_slice(grid, runway_ends, ["27R"], ["09L"], wx, static_cache=cache)
+    e2 = envelope.envelope_for_slice(grid, runway_ends, ["27R"], ["09L"], wx, static_cache=cache)
+    e3 = envelope.envelope_for_slice(grid, runway_ends, ["27L"], ["09R"], wx, static_cache=cache)
+    # First call is a miss, second is a cache hit (same config), third a new miss.
+    assert cache.stats["misses"] == 2
+    assert cache.stats["hits"] == 1
+    # e1 and e2 must be byte-identical (same config); e3 must differ from e1.
+    assert np.array_equal(e1, e2)
+    assert not np.array_equal(e1, e3)

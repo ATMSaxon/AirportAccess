@@ -41,7 +41,7 @@ from .loaders import (
     load_envelope_slice,
     load_risk_slice,
     load_sdf,
-    ofv_mask,
+    ofv_mask_on_grid,
 )
 from .smoothing import smooth_path
 
@@ -111,13 +111,23 @@ def _planner_inputs_from_disk(
     # 1. Static SDF (mandatory).
     grid, sdf = load_sdf(icao)
 
-    # 2. OFVs at endpoints.
-    src_grid, src_ofv = ofv_mask(icao, vertiport_src)
-    dst_grid, dst_ofv = ofv_mask(icao, vertiport_dst)
-    if src_grid.shape != grid.shape:
-        raise ValueError(f"OFV-source grid {src_grid.shape} != SDF grid {grid.shape}")
-    if dst_grid.shape != grid.shape:
-        raise ValueError(f"OFV-dest grid {dst_grid.shape} != SDF grid {grid.shape}")
+    # 2. OFVs at endpoints. The geometry-engineer's OFV is on a tiny local grid
+    # around each vertiport (40³ @ 10 m, see ``src/geometry/INTERFACES.md``); the
+    # airport SDF is on a coarser airport-wide grid (e.g. 600³ @ 100 m). We project
+    # each OFV onto the SDF grid via trilinear interpolation in ``ofv_mask_on_grid``
+    # so downstream code can AND ``(sdf > 0) & ofv_start`` without shape mismatch.
+    try:
+        src_ofv = ofv_mask_on_grid(icao, vertiport_src, grid)
+    except Exception as e:  # noqa: BLE001 — graceful degrade
+        LOG.warning("OFV[%s] projection failed (%s); dropping OFV-source mask",
+                    vertiport_src, e)
+        src_ofv = None
+    try:
+        dst_ofv = ofv_mask_on_grid(icao, vertiport_dst, grid)
+    except Exception as e:  # noqa: BLE001 — graceful degrade
+        LOG.warning("OFV[%s] projection failed (%s); dropping OFV-dest mask",
+                    vertiport_dst, e)
+        dst_ofv = None
 
     # 3. Dynamic envelope (optional; B1/B2 ignore it).
     envelope = None
@@ -186,8 +196,8 @@ def _planner_inputs_from_disk(
             envelope=envelope,
             risk=risk,
             density=density,
-            ofv_start=src_ofv.astype(bool),
-            ofv_end=dst_ofv.astype(bool),
+            ofv_start=src_ofv.astype(bool) if src_ofv is not None else None,
+            ofv_end=dst_ofv.astype(bool) if dst_ofv is not None else None,
         )
 
     meta = {

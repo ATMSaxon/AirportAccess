@@ -124,23 +124,53 @@ def accessibility_for_corridor(
 
     # Passenger weighting from BTS, LAWA peak share.
     weight = 1.0
-    if bts_od is not None and "pax_count" in bts_od.columns:
+    # BTS: accept both new `passengers` (D8) and legacy `pax_count` column names.
+    if bts_od is not None:
         try:
-            sub = bts_od
-            if "origin" in sub.columns and "dest" in sub.columns:
-                sub = sub[
-                    (sub["origin"].astype(str) == airport_cfg.get("iata", ""))
-                    | (sub["dest"].astype(str) == airport_cfg.get("iata", ""))
-                ]
-            total = float(sub["pax_count"].sum())
-            weight = max(total / 1e6, 0.1)
+            pax_col = None
+            for cand in ("passengers", "pax_count"):
+                if cand in bts_od.columns:
+                    pax_col = cand
+                    break
+            if pax_col is not None:
+                sub = bts_od
+                iata = airport_cfg.get("iata", "")
+                if iata and "origin" in sub.columns and "dest" in sub.columns:
+                    sub = sub[
+                        (sub["origin"].astype(str) == iata)
+                        | (sub["dest"].astype(str) == iata)
+                    ]
+                total = float(sub[pax_col].sum())
+                weight = max(total / 1e6, 0.1)
         except Exception as e:  # noqa: BLE001
             LOG.debug("BTS weighting failed (%s); falling back to uniform", e)
-    if lawa_peaks is not None and "hour" in lawa_peaks.columns and "share" in lawa_peaks.columns:
+    # LAWA: accept both new `peak_hour` string ("08-09") + `trips`/`direction` (D7)
+    # and legacy `hour` int + `share` columns.
+    if lawa_peaks is not None and len(lawa_peaks) > 0:
         try:
-            row = lawa_peaks[lawa_peaks["hour"].astype(int) == int(corridor.hour or 0)]
-            if len(row):
-                weight = float(weight * (1.0 + float(row.iloc[0]["share"])))
+            cols = set(lawa_peaks.columns)
+            h = int(corridor.hour or 0)
+            if {"peak_hour", "trips"}.issubset(cols):
+                # Parse peak_hour like "08-09" → start hour.
+                def _start_hour(s: str) -> int:
+                    try:
+                        return int(str(s).split("-", 1)[0])
+                    except (ValueError, IndexError):
+                        return -1
+                df = lawa_peaks.copy()
+                df["_h"] = df["peak_hour"].map(_start_hour)
+                row = df[df["_h"] == h]
+                if "direction" in row.columns:
+                    row = row[row["direction"].astype(str).str.lower() == "in"]
+                if len(row):
+                    trips = float(row["trips"].sum())
+                    total = float(df["trips"].sum()) or 1.0
+                    share = trips / total
+                    weight = float(weight * (1.0 + share))
+            elif {"hour", "share"}.issubset(cols):
+                row = lawa_peaks[lawa_peaks["hour"].astype(int) == h]
+                if len(row):
+                    weight = float(weight * (1.0 + float(row.iloc[0]["share"])))
         except Exception as e:  # noqa: BLE001
             LOG.debug("LAWA scaling failed (%s)", e)
     pax_score = float(saving_min) * float(weight)

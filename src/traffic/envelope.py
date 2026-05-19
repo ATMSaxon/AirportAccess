@@ -192,6 +192,26 @@ def load_static_mask(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
     return (q.sdf > 0.0).astype(bool, copy=False)
 
 
+def load_static_sdf(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
+    """Return the raw float ``A_static`` signed-distance field (not thresholded).
+
+    Used by the config-aware decomposition (static-base + active-delta) so the
+    baked-in always-on prisms (strip, transitional, inner-horizontal, conical,
+    OFZs, RESA) don't have to be re-evaluated per slice. Same source as
+    :func:`load_static_mask` — only the thresholding step is skipped.
+    """
+    try:
+        from ..geometry.query import SDFQuery             # type: ignore
+        q = SDFQuery.from_airport(icao)
+    except Exception:
+        return None
+    if q.sdf.shape != tuple(grid.shape):
+        log.error("static SDF shape %s != VoxelGrid shape %s for %s — ignoring.",
+                  q.sdf.shape, grid.shape, icao)
+        return None
+    return np.asarray(q.sdf, dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Opt-in: runway-config-aware A_static via geometry.PrismIndex
 # ---------------------------------------------------------------------------
@@ -228,29 +248,116 @@ def load_prism_index(icao: str):
         return None
 
 
+def _config_key(arrivals_active: Iterable[str],
+                departures_active: Iterable[str]) -> tuple:
+    """Hashable cache key for an active runway config (order-insensitive)."""
+    return (frozenset(arrivals_active or ()), frozenset(departures_active or ()))
+
+
+class ConfigStaticCache:
+    """Per-airport, per-config cache of ``A_static_t`` masks.
+
+    Implements the two perf wins suggested by geometry-engineer:
+
+    1. **Static-base + active-delta decomposition.** The always-on surfaces
+       are already baked into ``sdf_static`` (loaded via :func:`load_static_sdf`)
+       and never recomputed per slice. Only the active approach/takeoff prism
+       unions are evaluated via PrismIndex per call, then merged with
+       ``np.minimum.reduce``.
+    2. **Config-keyed memoisation.** Real LAX days typically have ≲ 6–8 distinct
+       (arrivals, departures) tuples across 96 slices; the cache turns those
+       96 evaluations into ~6–8.
+
+    Falls back gracefully to ``prism_index.sdf_at`` if the active-delta API is
+    not present on the supplied PrismIndex (older geometry builds).
+    """
+
+    def __init__(self, grid: VoxelGrid, prism_index,
+                 sdf_static: Optional[np.ndarray] = None,
+                 max_entries: int = 32):
+        if prism_index is None:
+            raise ValueError("ConfigStaticCache requires a non-None prism_index")
+        self.grid = grid
+        self.prism_index = prism_index
+        self.sdf_static = sdf_static                      # may be None
+        self._cache: dict[tuple, np.ndarray] = {}
+        self._max_entries = max_entries
+        self.hits = 0
+        self.misses = 0
+        # Pre-build voxel-centre meshgrid once — biggest single allocation, so
+        # we pay it on construction rather than per slice.
+        nx, ny, nz = grid.shape
+        xs = grid.x_min + (np.arange(nx) + 0.5) * grid.dx
+        ys = grid.y_min + (np.arange(ny) + 0.5) * grid.dy
+        zs = grid.z_min + (np.arange(nz) + 0.5) * grid.dz
+        self._X, self._Y, self._Z = np.meshgrid(xs, ys, zs, indexing="ij")
+        self._has_delta_api = (
+            hasattr(prism_index, "distance_to_active_approach")
+            and hasattr(prism_index, "distance_to_active_departure")
+        )
+
+    def mask_for(self, arrivals_active: Iterable[str],
+                 departures_active: Iterable[str]) -> np.ndarray:
+        key = _config_key(arrivals_active, departures_active)
+        cached = self._cache.get(key)
+        if cached is not None:
+            self.hits += 1
+            return cached
+        self.misses += 1
+        mask = self._compute(arrivals_active, departures_active)
+        # Bounded cache — for real LAX days max_entries=32 is well above the
+        # observed unique-config count (~6–8) so we never actually evict.
+        if len(self._cache) >= self._max_entries:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[key] = mask
+        return mask
+
+    def _compute(self, arrivals_active, departures_active) -> np.ndarray:
+        arr = list(arrivals_active) if arrivals_active else []
+        dep = list(departures_active) if departures_active else []
+        if self._has_delta_api:
+            # Active-delta path (cheaper: ~12 prism evals/call vs ~50).
+            d_arr = np.asarray(self.prism_index.distance_to_active_approach(
+                self._X, self._Y, self._Z, active_arrivals=arr or None))
+            d_dep = np.asarray(self.prism_index.distance_to_active_departure(
+                self._X, self._Y, self._Z, active_departures=dep or None))
+            stack = [d_arr, d_dep]
+            if self.sdf_static is not None and self.sdf_static.shape == d_arr.shape:
+                stack.append(self.sdf_static)
+            sdf_t = np.minimum.reduce(stack)
+        else:                                                # legacy fallback
+            sdf_t = np.asarray(self.prism_index.sdf_at(
+                self._X, self._Y, self._Z,
+                active_arrivals=arr or None,
+                active_departures=dep or None,
+            ))
+        return (sdf_t > 0.0).astype(bool, copy=False)
+
+    @property
+    def stats(self) -> dict:
+        total = self.hits + self.misses
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "unique_configs": len(self._cache),
+            "hit_rate": (self.hits / total) if total else 0.0,
+        }
+
+
 def static_mask_for_config(grid: VoxelGrid,
                            prism_index,
                            arrivals_active: Iterable[str],
-                           departures_active: Iterable[str]) -> np.ndarray:
-    """Return ``A_static_t``: boolean voxel mask filtered to the active config.
+                           departures_active: Iterable[str],
+                           sdf_static: Optional[np.ndarray] = None) -> np.ndarray:
+    """Return ``A_static_t`` for one (arrivals, departures) config.
 
-    Uses ``prism_index.sdf_at(X, Y, Z, active_arrivals, active_departures) > 0``
-    over the full voxel grid — matches ``VoxelGrid.shape`` exactly. ENU axes
-    (x, y) are evaluated at voxel centres in airport-local coords; z is treated
-    as MSL by adding the airport elevation if the prism_index exposes it,
-    otherwise as raw grid-z (the same convention used by ``SDFQuery``).
+    Thin wrapper around :class:`ConfigStaticCache` for one-shot callers. For
+    repeated evaluation across many slices, construct a ``ConfigStaticCache``
+    once and call ``mask_for(...)`` per slice to amortise the meshgrid +
+    benefit from the config-keyed cache.
     """
-    nx, ny, nz = grid.shape
-    xs = grid.x_min + (np.arange(nx) + 0.5) * grid.dx
-    ys = grid.y_min + (np.arange(ny) + 0.5) * grid.dy
-    zs = grid.z_min + (np.arange(nz) + 0.5) * grid.dz
-    X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
-    sdf_t = prism_index.sdf_at(
-        X, Y, Z,
-        active_arrivals=list(arrivals_active) or None,
-        active_departures=list(departures_active) or None,
-    )
-    return (np.asarray(sdf_t) > 0.0).astype(bool, copy=False)
+    cache = ConfigStaticCache(grid, prism_index, sdf_static=sdf_static)
+    return cache.mask_for(arrivals_active, departures_active)
 
 
 def envelope_for_slice(grid: VoxelGrid,
@@ -259,7 +366,8 @@ def envelope_for_slice(grid: VoxelGrid,
                        departures_active: Iterable[str],
                        weather: WeatherState,
                        a_static: Optional[np.ndarray] = None,
-                       prism_index=None) -> np.ndarray:
+                       prism_index=None,
+                       static_cache: Optional[ConfigStaticCache] = None) -> np.ndarray:
     """Return ``E_t``: boolean voxel grid where eVTOL is permissible.
 
     Parameters
@@ -267,14 +375,22 @@ def envelope_for_slice(grid: VoxelGrid,
     a_static
         Pre-loaded *global* static mask from :func:`load_static_mask` (the
         canonical and historically-stable path). If ``None`` and no
-        ``prism_index`` is given, A_static is treated as all-clear.
+        ``prism_index``/``static_cache`` is given, A_static is treated as all-clear.
     prism_index
-        Optional :class:`src.geometry.query.PrismIndex`. When supplied,
-        A_static is recomputed *per slice* from the runway-config-aware
-        protection union (``a_static`` is then ignored). This is the
-        recommended path for full "dynamic envelope" semantics.
+        Optional :class:`src.geometry.query.PrismIndex`. When supplied (and
+        ``static_cache`` is not), a fresh cache is built per call — fine for a
+        one-off but wasteful in a loop. Prefer ``static_cache``.
+    static_cache
+        Optional :class:`ConfigStaticCache`. When supplied, ``A_static`` is
+        recomputed *per active runway config* (cached) using the static-base
+        + active-delta decomposition. ``a_static`` and ``prism_index`` are then
+        ignored. This is the recommended path for full "dynamic envelope"
+        semantics in a loop.
     """
     closed = build_closure_mask(grid, runway_ends, arrivals_active, departures_active, weather)
+    if static_cache is not None:
+        a_static_t = static_cache.mask_for(arrivals_active, departures_active)
+        return a_static_t & (~closed)
     if prism_index is not None:
         a_static_t = static_mask_for_config(grid, prism_index, arrivals_active, departures_active)
         return a_static_t & (~closed)

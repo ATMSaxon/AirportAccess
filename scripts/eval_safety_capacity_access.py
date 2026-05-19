@@ -84,33 +84,62 @@ def _load_support_artefacts(icao: str, log) -> dict[str, Any]:
     if ofv:
         out["ofv"] = ofv
 
-    # Envelope-over-time (concat across all envelope_*.zarr in proc).
+    # Envelope-over-time (concat across all envelope_*.zarr/npz in proc).
     env_paths = sorted(proc.glob("envelope_*.zarr"))
+    npz_paths = sorted(p for p in proc.glob("envelope_*.npz") if ".grid" not in p.name)
+    slices: list[np.ndarray] = []
     if env_paths:
         try:
             import zarr  # noqa: F401
-            slices = []
             for ep in env_paths:
                 z = zarr.open(str(ep), mode="r")
-                arr = np.asarray(z["envelope"]) if "envelope" in z else np.asarray(z)
+                # Traffic-engineer's canonical layout: group with `mask` child.
+                if hasattr(z, "__contains__") and "mask" in z:
+                    arr = np.asarray(z["mask"])
+                elif hasattr(z, "__contains__") and "envelope" in z:
+                    arr = np.asarray(z["envelope"])
+                else:
+                    arr = np.asarray(z)
                 if arr.ndim == 4:
                     slices.append(arr)
                 elif arr.ndim == 3:
                     slices.append(arr[np.newaxis])
-            if slices:
-                out["envelopes_T"] = np.concatenate(slices, axis=0).astype(bool)
-                log.info("loaded envelopes_T shape=%s", out["envelopes_T"].shape)
         except Exception as e:  # noqa: BLE001
-            log.warning("envelope load failed: %s", e)
-
-    # ADS-B parquet
-    ads_path = proc / "adsb.parquet"
-    if ads_path.exists():
+            log.warning("envelope zarr load failed: %s", e)
+    if npz_paths and not slices:
+        for ep in npz_paths:
+            try:
+                with np.load(ep, allow_pickle=False) as zz:
+                    arr = zz["mask"] if "mask" in zz.files else zz[zz.files[0]]
+                    if arr.ndim == 4:
+                        slices.append(arr)
+                    elif arr.ndim == 3:
+                        slices.append(arr[np.newaxis])
+            except Exception as e:  # noqa: BLE001
+                log.warning("envelope npz load failed %s: %s", ep, e)
+    if slices:
         try:
-            out["adsb"] = pd.read_parquet(ads_path)
-            log.info("loaded ADS-B %d rows", len(out["adsb"]))
+            out["envelopes_T"] = np.concatenate(slices, axis=0).astype(bool)
+            log.info("loaded envelopes_T shape=%s", out["envelopes_T"].shape)
         except Exception as e:  # noqa: BLE001
-            log.warning("ADS-B parquet load failed: %s", e)
+            log.warning("envelope concat failed: %s", e)
+
+    # ADS-B parquet (per-day adsb_<YYYY-MM-DD>.parquet, or single adsb.parquet legacy).
+    ads_frames: list[pd.DataFrame] = []
+    for ap in sorted(proc.glob("adsb_*.parquet")):
+        try:
+            ads_frames.append(pd.read_parquet(ap))
+        except Exception as e:  # noqa: BLE001
+            log.warning("ADS-B load failed %s: %s", ap, e)
+    legacy_ads = proc / "adsb.parquet"
+    if legacy_ads.exists() and not ads_frames:
+        try:
+            ads_frames.append(pd.read_parquet(legacy_ads))
+        except Exception as e:  # noqa: BLE001
+            log.warning("ADS-B legacy load failed: %s", e)
+    if ads_frames:
+        out["adsb"] = pd.concat(ads_frames, ignore_index=True)
+        log.info("loaded ADS-B %d rows across %d file(s)", len(out["adsb"]), len(ads_frames))
 
     # METAR parquet
     metar_path = proc / "metar.parquet"
@@ -121,21 +150,28 @@ def _load_support_artefacts(icao: str, log) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             log.warning("METAR parquet load failed: %s", e)
 
-    # BTS DB1B parquet
-    bts_path = proc / "bts_db1b.parquet"
-    if bts_path.exists():
-        try:
-            out["bts_od"] = pd.read_parquet(bts_path)
-        except Exception as e:  # noqa: BLE001
-            log.warning("BTS parquet load failed: %s", e)
+    # BTS DB1B parquet — accept `db1b_ond.parquet` (D8) or legacy `bts_db1b.parquet`.
+    for bts_candidate in (proc / "db1b_ond.parquet", proc / "bts_db1b.parquet"):
+        if bts_candidate.exists():
+            try:
+                out["bts_od"] = pd.read_parquet(bts_candidate)
+                break
+            except Exception as e:  # noqa: BLE001
+                log.warning("BTS parquet load failed %s: %s", bts_candidate, e)
 
-    # LAWA peaks
-    lawa_path = proc / "lawa_peaks.csv"
-    if lawa_path.exists():
-        try:
-            out["lawa_peaks"] = pd.read_csv(lawa_path)
-        except Exception as e:  # noqa: BLE001
-            log.warning("LAWA CSV load failed: %s", e)
+    # LAWA peaks — accept `peak_hour.parquet` (D7) or legacy `lawa_peaks.csv`.
+    for lawa_candidate in (proc / "peak_hour.parquet",
+                           proc / "lawa_peaks.parquet",
+                           proc / "lawa_peaks.csv"):
+        if lawa_candidate.exists():
+            try:
+                if lawa_candidate.suffix == ".csv":
+                    out["lawa_peaks"] = pd.read_csv(lawa_candidate)
+                else:
+                    out["lawa_peaks"] = pd.read_parquet(lawa_candidate)
+                break
+            except Exception as e:  # noqa: BLE001
+                log.warning("LAWA load failed %s: %s", lawa_candidate, e)
 
     return out, cfg
 

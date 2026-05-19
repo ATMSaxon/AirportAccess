@@ -231,3 +231,78 @@ def test_planner_world_to_ijk_consistency():
         y = grid.y_min + (ijk[1] + 0.5) * grid.dy
         z = grid.z_min + (ijk[2] + 0.5) * grid.dz
         assert world_to_ijk(grid, x, y, z) == ijk
+
+
+# ---------------------------------------------------------------------------
+# OFV → SDF-grid re-projection (regression: shape-mismatch bug)
+# ---------------------------------------------------------------------------
+
+
+def test_ofv_mask_on_grid_reprojects_local_ofv(tmp_path, monkeypatch):
+    """ofv_mask_on_grid must return a target-grid-shaped bool mask, not the OFV's
+    native shape, and must light up cells only inside the OFV's bbox.
+
+    Regression for the (sdf>0) & ofv_start broadcast crash reported by team-lead:
+    when the OFV is on a local 40³ grid and the SDF is on a 600³ airport grid,
+    the projected mask must end up on the SDF grid.
+    """
+    from src.planning.loaders import ofv_mask_on_grid
+    from src.utils.grid import VoxelGrid
+
+    # 1. Build a synthetic OFV ("funnel") on its own local grid centred at
+    # vertiport @ (1000, 500, 0). Negative inside funnel per geometry-engineer's
+    # sign convention. The funnel core must span at least 2× the *target* dx
+    # (100 m below) so coarse-grid interpolation lands inside it.
+    n_local = 15
+    dx_local = 50.0  # 50 m local cell → 750 m OFV span
+    cx, cy = 1000.0, 500.0  # vertiport ENU
+    grid_x = cx + (np.arange(n_local) - n_local / 2.0 + 0.5) * dx_local
+    grid_y = cy + (np.arange(n_local) - n_local / 2.0 + 0.5) * dx_local
+    grid_z = (np.arange(n_local) + 0.5) * dx_local
+    ofv_sdf = np.full((n_local, n_local, n_local), 50.0, dtype=np.float32)
+    # Funnel core: 5×5×5 cells = 250×250×250 m centred on the vertiport.
+    ofv_sdf[5:10, 5:10, :5] = -10.0
+
+    # 2. Persist as the geometry-engineer's npz layout so ofv_mask_on_grid can load it.
+    icao = "KSYN_OFVTEST"
+    proc = tmp_path / "processed" / icao
+    proc.mkdir(parents=True)
+    np.savez(
+        proc / f"ofv_VTEST.npz",
+        sdf=ofv_sdf, grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
+    )
+
+    # Point ``paths.airport_dir(icao, "processed")`` at our tmp tree.
+    import src.planning.loaders as loaders_mod
+    monkeypatch.setattr(
+        loaders_mod.paths, "airport_dir",
+        lambda icao, kind="processed": tmp_path / kind / icao,
+    )
+
+    # 3. Target grid is much larger and coarser than the OFV (airport-wide style).
+    target = VoxelGrid(
+        x_min=-2000.0, x_max=2000.0, dx=100.0,
+        y_min=-2000.0, y_max=2000.0, dy=100.0,
+        z_min=0.0, z_max=600.0, dz=30.0,
+    )
+
+    mask = ofv_mask_on_grid(icao, "VTEST", target)
+    assert mask.shape == target.shape, (
+        f"projected OFV mask should match target grid shape; got {mask.shape}, want {target.shape}"
+    )
+    assert mask.dtype == bool
+    # At least one cell should be inside the funnel.
+    assert mask.sum() > 0
+    # All "True" cells lie within the OFV's bbox.
+    ii, jj, kk = np.where(mask)
+    xs = target.x_min + (ii + 0.5) * target.dx
+    ys = target.y_min + (jj + 0.5) * target.dy
+    zs = target.z_min + (kk + 0.5) * target.dz
+    half_local = n_local * dx_local / 2.0
+    assert (xs >= cx - half_local).all() and (xs <= cx + half_local).all()
+    assert (ys >= cy - half_local).all() and (ys <= cy + half_local).all()
+    assert (zs >= 0.0).all() and (zs <= n_local * dx_local).all()
+    # Far-away cells must be False (sanity that we restricted to the bbox).
+    far_i = int((10000.0 - target.x_min) / target.dx)
+    if 0 <= far_i < target.shape[0]:
+        assert not mask[far_i, 0, 0]

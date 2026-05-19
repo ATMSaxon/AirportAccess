@@ -56,14 +56,34 @@ class EnvelopeSlice:
 # ---------------------------------------------------------------------------
 
 def _grid_from_npz(npz: np.lib.npyio.NpzFile, fallback_cfg: dict | None = None) -> VoxelGrid:
-    """Extract a VoxelGrid from a sidecar 'grid' field, or fall back to airport cfg."""
+    """Extract a VoxelGrid from a sidecar 'grid' field or cell-centre arrays.
+
+    Recognised layouts:
+      * ``grid`` — JSON-encoded VoxelGrid dict (legacy).
+      * ``grid_x``, ``grid_y``, ``grid_z`` — 1-D cell-centre coordinate arrays
+        (geometry-engineer's canonical format, see ``src/geometry/INTERFACES.md``).
+
+    Falls back to ``VoxelGrid.from_airport_cfg(fallback_cfg)`` if neither is present.
+    """
     if "grid" in npz.files:
         raw = npz["grid"]
         meta = json.loads(str(raw)) if raw.shape == () else json.loads(raw.item())
         return VoxelGrid(**meta)
+    if {"grid_x", "grid_y", "grid_z"}.issubset(set(npz.files)):
+        gx = np.asarray(npz["grid_x"], dtype=np.float64)
+        gy = np.asarray(npz["grid_y"], dtype=np.float64)
+        gz = np.asarray(npz["grid_z"], dtype=np.float64)
+        dx = float(gx[1] - gx[0]) if gx.size > 1 else 1.0
+        dy = float(gy[1] - gy[0]) if gy.size > 1 else 1.0
+        dz = float(gz[1] - gz[0]) if gz.size > 1 else 1.0
+        return VoxelGrid(
+            x_min=float(gx[0] - dx / 2.0), x_max=float(gx[-1] + dx / 2.0), dx=dx,
+            y_min=float(gy[0] - dy / 2.0), y_max=float(gy[-1] + dy / 2.0), dy=dy,
+            z_min=float(gz[0] - dz / 2.0), z_max=float(gz[-1] + dz / 2.0), dz=dz,
+        )
     if fallback_cfg is not None:
         return VoxelGrid.from_airport_cfg(fallback_cfg)
-    raise ValueError("npz lacks 'grid' field and no fallback config provided")
+    raise ValueError("npz lacks 'grid' / 'grid_x' field and no fallback config provided")
 
 
 def load_sdf(icao: str) -> Tuple[VoxelGrid, np.ndarray]:
@@ -86,24 +106,118 @@ def load_sdf(icao: str) -> Tuple[VoxelGrid, np.ndarray]:
 
 
 def load_ofv(icao: str, vertiport_id: str) -> Tuple[VoxelGrid, np.ndarray]:
-    """Load the per-vertiport obstacle-free volume mask (positive sdf -> clear OFV airspace)."""
+    """Load the per-vertiport OFV-funnel SDF on its **native** local grid.
+
+    Geometry-engineer stores OFVs as 40³ @ 10 m around each vertiport (see
+    ``src/geometry/INTERFACES.md``). Sign convention is *inverted* relative to the
+    airport OLS SDF: **negative inside the funnel** (safe airspace) and **positive
+    outside**. The returned ``VoxelGrid`` is the OFV's *local* grid, NOT the
+    airport-wide grid; callers that need a mask on the airport grid should use
+    ``ofv_mask_on_grid`` instead.
+    """
     fp = paths.airport_dir(icao, kind="processed") / f"ofv_{vertiport_id}.npz"
     if not fp.exists():
         raise MissingArtifactError(
             f"Missing OFV {vertiport_id} for {icao}: {fp}. "
             f"Run `python scripts/build_ols.py --airport {icao}` first."
         )
-    cfg = load_airport(icao)
     with np.load(fp, allow_pickle=False) as z:
-        grid = _grid_from_npz(z, fallback_cfg=cfg)
+        # OFV files have grid_x/y/z arrays — do NOT fall back to airport cfg
+        # because the OFV lives on a tiny vertiport-local grid that doesn't
+        # match the airport-wide SDF grid.
+        grid = _grid_from_npz(z, fallback_cfg=None)
         ofv = z["sdf"].astype(np.float32, copy=False)
     return grid, ofv
 
 
 def ofv_mask(icao: str, vertiport_id: str) -> Tuple[VoxelGrid, np.ndarray]:
-    """Same as load_ofv but already collapsed to a boolean clear-cells mask."""
+    """Load the OFV on its native local grid as a boolean "inside funnel" mask.
+
+    Note the sign flip: a cell is *inside the funnel* (allowed) iff the stored
+    SDF value is **negative** per geometry-engineer's INTERFACES.md §2.
+    """
     grid, ofv = load_ofv(icao, vertiport_id)
-    return grid, ofv > 0
+    return grid, ofv < 0
+
+
+def ofv_mask_on_grid(
+    icao: str,
+    vertiport_id: str,
+    target_grid: "VoxelGrid",
+) -> np.ndarray:
+    """Project the OFV-funnel mask onto an arbitrary target grid.
+
+    The OFV lives on a vertiport-local 40³ @ 10 m grid; the planner runs on the
+    airport-wide (or coarsened-planning) grid. We trilinear-interpolate the OFV
+    SDF at each target-grid cell centre via ``SDFQuery``, threshold (<0 = inside
+    funnel), and restrict to the OFV's native bounding box (cells far from the
+    vertiport are never "inside the funnel" regardless of edge-extrapolated values).
+
+    Returns a bool ndarray of shape ``target_grid.shape``.
+    """
+    from src.geometry.query import SDFQuery
+
+    fp = paths.airport_dir(icao, kind="processed") / f"ofv_{vertiport_id}.npz"
+    if not fp.exists():
+        raise MissingArtifactError(
+            f"Missing OFV {vertiport_id} for {icao}: {fp}. "
+            f"Run `python scripts/build_ols.py --airport {icao}` first."
+        )
+    with np.load(fp, allow_pickle=False) as z:
+        ofv = z["sdf"].astype(np.float32, copy=False)
+        gx = z["grid_x"].astype(np.float64)
+        gy = z["grid_y"].astype(np.float64)
+        gz = z["grid_z"].astype(np.float64)
+
+    nx, ny, nz = target_grid.shape
+    inside = np.zeros((nx, ny, nz), dtype=bool)
+
+    # Native OFV bbox (half-cell on each side).
+    dx2 = (float(gx[1] - gx[0]) / 2.0) if gx.size > 1 else 0.5
+    dy2 = (float(gy[1] - gy[0]) / 2.0) if gy.size > 1 else 0.5
+    dz2 = (float(gz[1] - gz[0]) / 2.0) if gz.size > 1 else 0.5
+    x_lo, x_hi = float(gx[0]) - dx2, float(gx[-1]) + dx2
+    y_lo, y_hi = float(gy[0]) - dy2, float(gy[-1]) + dy2
+    z_lo, z_hi = float(gz[0]) - dz2, float(gz[-1]) + dz2
+
+    # Translate the OFV bbox into target-grid index ranges. Only sample cells
+    # whose centres might fall inside; the OFV is tiny (~80×80×300 m around a
+    # vertiport) vs. the airport grid (60×60 km), so this avoids interpolating
+    # ~42M cells when only a handful actually matter.
+    def _range(lo: float, hi: float, gmin: float, dg: float, n: int) -> tuple[int, int]:
+        i_lo = int(np.floor((lo - gmin) / dg - 0.5))
+        i_hi = int(np.ceil((hi - gmin) / dg - 0.5))
+        return max(i_lo, 0), min(i_hi + 1, n)
+
+    i0, i1 = _range(x_lo, x_hi, target_grid.x_min, target_grid.dx, nx)
+    j0, j1 = _range(y_lo, y_hi, target_grid.y_min, target_grid.dy, ny)
+    k0, k1 = _range(z_lo, z_hi, target_grid.z_min, target_grid.dz, nz)
+
+    if i1 > i0 and j1 > j0 and k1 > k0:
+        q = SDFQuery(ofv, gx, gy, gz)
+        txs = target_grid.x_min + (np.arange(i0, i1) + 0.5) * target_grid.dx
+        tys = target_grid.y_min + (np.arange(j0, j1) + 0.5) * target_grid.dy
+        tzs = target_grid.z_min + (np.arange(k0, k1) + 0.5) * target_grid.dz
+        X, Y, Z = np.meshgrid(txs, tys, tzs, indexing="ij")
+        vals = q.clearance_m(X.ravel(), Y.ravel(), Z.ravel())
+        if np.isscalar(vals):
+            vals = np.full(X.size, float(vals), dtype=np.float32)
+        vals = np.asarray(vals, dtype=np.float32).reshape(X.shape)
+        in_bbox_block = (
+            (X >= x_lo) & (X <= x_hi)
+            & (Y >= y_lo) & (Y <= y_hi)
+            & (Z >= z_lo) & (Z <= z_hi)
+        )
+        # OFV sign: negative inside funnel → True.
+        inside[i0:i1, j0:j1, k0:k1] = (vals < 0.0) & in_bbox_block
+
+    LOG.debug(
+        "ofv_mask_on_grid %s/%s: native bbox x=[%.0f,%.0f] y=[%.0f,%.0f] z=[%.0f,%.0f]; "
+        "sampled %d×%d×%d slab; %d/%d cells in funnel",
+        icao, vertiport_id, x_lo, x_hi, y_lo, y_hi, z_lo, z_hi,
+        i1 - i0, j1 - j0, k1 - k0, int(inside.sum()), int(inside.size),
+    )
+    return inside
 
 
 # ---------------------------------------------------------------------------

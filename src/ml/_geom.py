@@ -381,16 +381,45 @@ class AirportGeom:
                                  active_arrivals: Sequence[str],
                                  active_departures: Sequence[str],
                                  n_samples: int = 16) -> tuple[bool, bool, bool]:
-        """Coarse intersection test by sampling points along the segment.
+        """Sample-along-segment intersection test against active prisms.
+
+        When `PrismIndex` is available, delegates the per-sample membership
+        check to its vectorised `point_in_*_prism` calls (one shapely
+        `contains_xy` per (runway, surface) over the full 16-point batch).
+        That picks up the full 3-section Annex-14 approach surface and the
+        capped takeoff prism — the local fallback only models a single-section
+        approach + single-section takeoff.
 
         Returns (approach_hit, departure_hit, missed_approach_hit).
         """
         ts = np.linspace(0.0, 1.0, n_samples)
+        xs = p0[0] + ts * (p1[0] - p0[0])
+        ys = p0[1] + ts * (p1[1] - p0[1])
+        zs_msl = p0[2] + ts * (p1[2] - p0[2])
+
+        idx = self.prism_index
+        if idx is not None:
+            try:
+                zs_agl = zs_msl - self.field_elev_m
+                approach_hit = any(
+                    bool(np.asarray(idx.point_in_approach_prism(
+                        xs, ys, zs_agl, rwy_id=rid)).any())
+                    for rid in active_arrivals)
+                missed_hit = any(
+                    bool(np.asarray(idx.point_in_missed_approach(
+                        xs, ys, zs_agl, rwy_id=rid)).any())
+                    for rid in active_arrivals)
+                departure_hit = any(
+                    bool(np.asarray(idx.point_in_departure_prism(
+                        xs, ys, zs_agl, rwy_id=rid)).any())
+                    for rid in active_departures)
+                return approach_hit, departure_hit, missed_hit
+            except Exception:                          # noqa: BLE001
+                pass                                   # fall through to coarse
+
         approach_hit = departure_hit = missed_hit = False
-        for t in ts:
-            x = float(p0[0] + t * (p1[0] - p0[0]))
-            y = float(p0[1] + t * (p1[1] - p0[1]))
-            z = float(p0[2] + t * (p1[2] - p0[2]))
+        for ti in range(n_samples):
+            x = float(xs[ti]); y = float(ys[ti]); z = float(zs_msl[ti])
             for rid in active_arrivals:
                 try:
                     r = self.runway_by_id(rid)
