@@ -1,82 +1,148 @@
 #!/usr/bin/env python3
-"""M1 orchestrator — call every `src.data.source_*.fetch()` for a given airport + window.
+"""Orchestrate the eight DREAM data sources for one airport + window.
 
-Each source module is expected to expose:
-    def fetch(airport_cfg: dict, window: str, out_dir: pathlib.Path) -> dict
-        returns a manifest-like dict and writes its primary artefact (with `_manifest.json`)
-        OR writes a `<source>.OFFLINE.json` and returns it.
+Usage:
+    python scripts/acquire_all.py --airport KLAX --window 2024-08
+    python scripts/acquire_all.py --airport KSFO --window 2024-08 --skip opensky
 
-Missing source modules are recorded but don't fail the run.
+Each source is run independently; any failure is captured to a `<source>.OFFLINE.json`
+sibling and does not abort the run. Writes
+`data/processed/<ICAO>/_inventory.json` summarising what came back.
 """
 from __future__ import annotations
+
 import argparse
-import importlib
-import importlib.util
 import sys
+import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+# Make the project root importable when this script is invoked directly
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from src.utils import paths, config, logs, io  # noqa: E402
+from src.data import (
+    source_bts, source_faa_dof, source_faa_nasr, source_lawa,
+    source_noaa_wx, source_opensky, source_osm, source_usgs_3dep,
+)
+from src.data._common import FetchResult, write_offline
+from src.utils import io as io_utils
+from src.utils import paths as path_utils
+from src.utils.config import load_airport
+from src.utils.logs import get_logger, setup_logging
 
-LOG = logs.get_logger("acquire_all")
+logger = get_logger(__name__)
 
-SOURCES = [
-    "source_faa_nasr",
-    "source_faa_dof",
-    "source_usgs_3dep",
-    "source_osm",
-    "source_opensky",
-    "source_noaa_wx",
-    "source_lawa",
-    "source_bts",
+# (name, module, offline-recovery checklist)
+SOURCES: list[tuple[str, object, list[str]]] = [
+    ("faa_nasr", source_faa_nasr, [
+        "Verify configs/airports/<ICAO>.yaml has a runways block.",
+        "If the YAML is empty, download FAA NFDC NASR ZIP and rerun.",
+    ]),
+    ("faa_dof", source_faa_dof, [
+        "Manually download https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP",
+        "Drop it under data/cache/faa_dof/DAILY_DOF.ZIP",
+        "Re-run scripts/acquire_all.py",
+    ]),
+    ("usgs_3dep", source_usgs_3dep, [
+        "Manually browse https://apps.nationalmap.gov/downloader/",
+        "Download 1/3 arc-second tiles covering the ARP-centred 60 km box.",
+        "Drop the .tif files under data/cache/usgs_3dep/<ICAO>/ and re-run.",
+    ]),
+    ("osm", source_osm, [
+        "Overpass servers throttle aggressively. Wait and re-run, or",
+        "Use https://overpass-turbo.eu/ to export the same bbox and drop GeoJSON.",
+    ]),
+    ("opensky", source_opensky, [
+        "Register at https://opensky-network.org/",
+        "Export OPENSKY_USERNAME and OPENSKY_PASSWORD env vars.",
+        "pip install pyopensky.",
+        "Re-run scripts/acquire_all.py.",
+    ]),
+    ("noaa_wx", source_noaa_wx, [
+        "AWC API rarely fails; check network egress.",
+        "For 2024-08 historical METARs, see https://www.aviationweather.gov/dataserver",
+        "ERA5 needs ~/.cdsapirc credentials.",
+    ]),
+    ("lawa", source_lawa, [
+        "Hard-coded — should never fail. If it does, inspect src/data/source_lawa.py.",
+    ]),
+    ("bts", source_bts, [
+        "Visit https://www.transtats.bts.gov/DL_SelectFields.aspx?gnoyr_VQ=FLM",
+        "Select Year=2024, Quarter=3, table DB1B Coupon, Download.",
+        "Drop ZIP at data/cache/bts/Origin_and_Destination_Survey_DB1BCoupon_2024_3.zip",
+        "Re-run scripts/acquire_all.py.",
+    ]),
 ]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--airport", required=True, help="ICAO code (e.g. KLAX)")
-    parser.add_argument("--window", default="2024-08", help="month or single date")
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--sources", nargs="*", default=None,
-                        help="restrict to a subset of source ids (default: all 8)")
+    parser.add_argument("--window", default="2024-08", help="Time window tag (e.g. 2024-08)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Override output dir (default: data/processed/<ICAO>)")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--skip", default="", help="Comma-separated source names to skip")
+    parser.add_argument("--only", default="", help="Comma-separated source names to run exclusively")
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    cfg = config.load_airport(args.airport)
-    out_dir = Path(args.output_dir) if args.output_dir else paths.airport_dir(args.airport, "processed")
-    LOG.info("Acquiring %s for %s into %s", args.window, args.airport, out_dir)
+    setup_logging("DEBUG" if args.debug else "INFO")
+    cfg = load_airport(args.airport)
+    if args.output_dir:
+        out_root = Path(args.output_dir)
+    else:
+        out_root = path_utils.airport_dir(args.airport, "processed")
+    out_root.mkdir(parents=True, exist_ok=True)
 
-    sources = args.sources or SOURCES
-    inventory: dict = {"airport": args.airport, "window": args.window, "sources": {}}
-    failed: list[str] = []
-    for src_id in sources:
-        module_name = f"src.data.{src_id}"
-        if importlib.util.find_spec(module_name) is None:
-            LOG.warning("Source module not implemented yet: %s", module_name)
-            inventory["sources"][src_id] = {"status": "MISSING_MODULE"}
-            failed.append(src_id)
+    skip = {s.strip() for s in args.skip.split(",") if s.strip()}
+    only = {s.strip() for s in args.only.split(",") if s.strip()}
+
+    inventory: dict = {
+        "icao": args.airport,
+        "window": args.window,
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "sources": {},
+    }
+
+    overall_t0 = time.time()
+    for name, mod, recovery in SOURCES:
+        if only and name not in only:
             continue
+        if name in skip:
+            logger.info("skip %s", name)
+            continue
+        logger.info("=== source %s ===", name)
+        t0 = time.time()
         try:
-            mod = importlib.import_module(module_name)
-            fetch = getattr(mod, "fetch", None)
-            if fetch is None:
-                LOG.warning("%s has no fetch()", module_name)
-                inventory["sources"][src_id] = {"status": "NO_FETCH_FN"}
-                failed.append(src_id)
-                continue
-            LOG.info("→ %s", src_id)
-            info = fetch(cfg, args.window, out_dir) or {"status": "OK"}
-            inventory["sources"][src_id] = info
-        except Exception as e:
-            LOG.exception("%s failed", src_id)
-            inventory["sources"][src_id] = {"status": "ERROR", "error": str(e)}
-            failed.append(src_id)
+            result: FetchResult = mod.fetch(cfg, window=args.window, out_dir=out_root)
+            inventory["sources"][name] = result.to_inventory_entry()
+        except Exception as exc:  # noqa: BLE001 — universal trap by design
+            logger.exception("source %s failed", name)
+            offline_path = write_offline(
+                name,
+                out_root,
+                error=f"{exc.__class__.__name__}: {exc}",
+                recovery=recovery,
+                source_url=getattr(mod, "SOURCE_URL", ""),
+                params={"airport": args.airport, "window": args.window},
+            )
+            inventory["sources"][name] = {
+                "status": "offline",
+                "files": [offline_path.name],
+                "error": str(exc),
+            }
+        logger.info("source %s done in %.1fs", name, time.time() - t0)
 
-    io.write_json(out_dir / "_inventory.json", inventory)
-    LOG.info("Wrote %s", out_dir / "_inventory.json")
-    LOG.info("Done. %d/%d sources completed.", len(sources) - len(failed), len(sources))
-    return 0 if not failed else 1
+    inventory["wall_time_s"] = round(time.time() - overall_t0, 1)
+    io_utils.write_json(out_root / "_inventory.json", inventory)
+    logger.info("inventory → %s", out_root / "_inventory.json")
+
+    ok = sum(1 for v in inventory["sources"].values() if v["status"] == "ok")
+    off = sum(1 for v in inventory["sources"].values() if v["status"] == "offline")
+    logger.info("DONE: %d ok, %d offline (%.1fs wall)", ok, off, inventory["wall_time_s"])
+    return 0  # offline manifests count as clean
 
 
 if __name__ == "__main__":
