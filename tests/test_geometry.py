@@ -169,3 +169,63 @@ def test_vertiport_ofv_funnel_sign(tmp_path):
     iy_far = int(np.argmin(np.abs(gy - (cy + 1000.0))))
     iz_low = int(np.argmin(np.abs(gz - (z_base + 10.0))))
     assert sdf[ix_far, iy_far, iz_low] > 0, "far-from-funnel point should be outside (positive SDF)"
+
+
+# -------------------------------------------------------------------- PrismIndex (runway-config-aware)
+
+def test_prism_index_membership_and_filtered_sdf(synthetic):
+    """PrismIndex per-prism membership + filtered SDF behave consistently with the static SDF.
+
+    KSYN runway 09: thr at (0,0), aircraft land coming from the WEST, so the
+    approach prism extends to ``x < 0`` and the takeoff-climb prism extends
+    east of the stop end (``x > 3000``).
+    """
+    from src.geometry.query import PrismIndex
+    gdf = synthetic["gdf"]
+    idx = PrismIndex(gdf)
+    rwy_ids = idx.runway_ids()
+    assert "09" in rwy_ids and "27" in rwy_ids, f"unexpected runway ids {rwy_ids}"
+
+    # Approach to RWY 09 is WEST of the threshold (x < 0).
+    assert idx.point_in_approach_prism(-300.0, 0.0, 2.0, rwy_id="09") is True
+    # That same point is NOT in RWY 09's takeoff-climb (which lies east of x=3000).
+    assert idx.point_in_departure_prism(-300.0, 0.0, 2.0, rwy_id="09") is False
+    # Missed-approach for RWY 09 == takeoff-climb of RWY 09; ~3500 m east of thr is inside.
+    assert idx.point_in_missed_approach(3500.0, 0.0, 5.0, rwy_id="09") is True
+
+    # Pick a point inside the RWY 09 approach prism but ABOVE the inner-horizontal
+    # ceiling (45 m AGL) so the static-prism set is *clear* of it. At axial 2940 m
+    # the section-1 approach top is z = 0.02 * 2940 ≈ 58.8 m, so z=50 m is inside.
+    pt = (-3000.0, 0.0, 50.0)
+    assert idx.point_in_approach_prism(*pt, rwy_id="09") is True
+
+    # Filtered SDF with active arrivals=09 → negative (point inside approach).
+    val = float(idx.sdf_at(*pt, active_arrivals=["09"], active_departures=["09"]))
+    assert val < 0, f"point inside RWY 09 approach should give negative filtered SDF; got {val}"
+
+    # Filtered SDF with empty arrivals/departures excludes that approach prism;
+    # the same point lies above the inner-horizontal and outside all other static
+    # prisms, so it should now be clear (positive).
+    val_off = float(idx.sdf_at(*pt, active_arrivals=[], active_departures=[]))
+    assert val_off > 0, f"with arrivals={{}} the same point should be clear; got {val_off}"
+
+    # distance_to_active_approach respects the filter — None means all approaches.
+    d_all = float(idx.distance_to_active_approach(*pt))
+    d_09 = float(idx.distance_to_active_approach(*pt, active_arrivals=["09"]))
+    assert d_all == d_09, "single-runway and all-arrivals should match here"
+    assert d_09 < 0, f"inside RWY 09 approach → negative distance; got {d_09}"
+
+
+def test_prism_index_vector_inputs(synthetic):
+    """PrismIndex queries accept ndarray inputs and return arrays of matching shape."""
+    from src.geometry.query import PrismIndex
+    idx = PrismIndex(synthetic["gdf"])
+    xs = np.array([-300.0, 1500.0, 5000.0])
+    ys = np.array([0.0, 0.0, 0.0])
+    zs = np.array([2.0, 0.0, 1500.0])
+    membership = idx.point_in_approach_prism(xs, ys, zs, rwy_id="09")
+    assert membership.shape == (3,), f"expected shape (3,); got {membership.shape}"
+    assert membership[0] == True and membership[2] == False
+    sdfs = idx.sdf_at(xs, ys, zs)
+    assert sdfs.shape == (3,)
+    assert np.all(np.isfinite(sdfs))

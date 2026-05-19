@@ -12,12 +12,24 @@ Exports:
        .d_approach(x, y)   → distance to nearest approach-surface footprint
        .d_departure(x, y)  → distance to nearest takeoff-climb footprint
 
-These three (plus the 3-D SDF for d_OLS depth) are the features the ml-engineer
-needs (`d_OLS, d_runway, d_approach, d_departure`).
+  - PrismIndex: per-prism membership and *runway-configuration-aware* filtered
+    SDF (computes signed distance to the union of prisms restricted to the
+    currently-active arrival / departure runways).
+       .point_in_approach_prism(x, y, z, rwy_id=None)   → bool array
+       .point_in_departure_prism(x, y, z, rwy_id=None)  → bool array
+       .point_in_missed_approach(x, y, z, rwy_id=None)  → bool array
+       .sdf_at(x, y, z, active_arrivals=None, active_departures=None) → float array
+       .distance_to_active_approach(x, y, z, active_arrivals=None)    → float array
+       .distance_to_active_departure(x, y, z, active_departures=None) → float array
+
+The first three groups (3-D SDF, 2-D family distance) are static (run-config
+agnostic). PrismIndex layers on top so the ml-lane / planning-lane can sample
+counterfactual conflicts under a specific runway configuration (e.g. KLAX
+{arr: 24R/25L, dep: 24L/25R}) without rebuilding the global SDF.
 """
 from __future__ import annotations
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Iterable, Optional, Sequence
 import numpy as np
 import shapely
 from shapely import unary_union
@@ -25,7 +37,17 @@ from shapely import unary_union
 from ..utils.paths import airport_dir
 from ..utils.logs import get_logger
 from .ols_surfaces import (
-    APPROACH, TAKEOFF, RUNWAY_STRIP,
+    APPROACH, TAKEOFF, TRANSITIONAL, INNER_HORIZONTAL, CONICAL,
+    RUNWAY_STRIP, RESA, OFZ_INNER_APPROACH, OFZ_INNER_TRANSITIONAL,
+    Prism,
+)
+
+# Surfaces that are *always* protected regardless of the active runway-config.
+# (Inner-horizontal, conical, transitional, OFZs, runway strip, RESA do not flip
+# direction with traffic flow; only the approach/takeoff prisms are selectable.)
+_STATIC_SURFACES = (
+    RUNWAY_STRIP, INNER_HORIZONTAL, CONICAL, TRANSITIONAL,
+    OFZ_INNER_APPROACH, OFZ_INNER_TRANSITIONAL, RESA,
 )
 
 logger = get_logger(__name__)
@@ -160,3 +182,218 @@ class SurfaceDistance:
 
     def d_departure(self, x, y):
         return self._distance((TAKEOFF,), x, y)
+
+
+# ============================================================================
+# Runway-config-aware prism index (per-prism membership + filtered SDF)
+# ============================================================================
+
+def _scalar_or_array(out: np.ndarray, was_scalar: bool):
+    if was_scalar:
+        return out.item() if out.size == 1 else float(out.ravel()[0])
+    return out
+
+
+class PrismIndex:
+    """Per-prism membership and runway-configuration-aware filtered SDF.
+
+    Loads the OLS GeoPackage written by `scripts/build_ols.py` and lets you
+    ask:
+
+      * is point P inside the *approach* / *takeoff* / *missed-approach* prism
+        of a specific runway (or any runway if ``rwy_id`` is None)?
+      * what is the signed distance to the *active* protection union — i.e.
+        the union of approach prisms for ``active_arrivals``, takeoff prisms
+        for ``active_departures``, plus the always-protected static surfaces
+        (runway strip, transitional, inner-horizontal, conical, OFZs, RESA)?
+
+    The "missed approach" geometry is modelled as the takeoff-climb prism of
+    the *same* runway-ID: when an aircraft on the approach to RWY 24L goes
+    around, it climbs straight ahead (along +runway-heading) — which is
+    exactly the takeoff-climb surface anchored at that runway's stop-end.
+    """
+
+    def __init__(self, gdf):
+        self.gdf = gdf
+        self._prisms: list[Prism] = [Prism.from_row(r) for _, r in gdf.iterrows()]
+        # Pre-index by surface and by (runway_id, surface) for fast lookups.
+        self._by_surface: dict[str, list[Prism]] = {}
+        self._by_rwy_surface: dict[tuple[str, str], list[Prism]] = {}
+        for p in self._prisms:
+            self._by_surface.setdefault(p.surface, []).append(p)
+            self._by_rwy_surface.setdefault((p.runway_id, p.surface), []).append(p)
+        self._static_prisms = [p for p in self._prisms if p.surface in _STATIC_SURFACES]
+
+    # ---------------------------------------------------------------- load
+    @classmethod
+    def from_airport(cls, icao: str) -> "PrismIndex":
+        import geopandas as gpd
+        gpkg = airport_dir(icao, "processed") / "ols.gpkg"
+        gdf = gpd.read_file(gpkg, layer="ols")
+        return cls(gdf)
+
+    @classmethod
+    def from_gdf(cls, gdf) -> "PrismIndex":
+        return cls(gdf)
+
+    # ---------------------------------------------------------------- helpers
+    def runway_ids(self) -> list[str]:
+        return sorted({p.runway_id for p in self._prisms if p.runway_id != "-"})
+
+    def _prisms_for(self, surface: str, rwy_id: Optional[str]) -> list[Prism]:
+        if rwy_id is None:
+            return list(self._by_surface.get(surface, []))
+        return list(self._by_rwy_surface.get((rwy_id, surface), []))
+
+    # ---------------------------------------------------------------- per-prism membership
+    @staticmethod
+    def _point_in_prism(prism: Prism, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
+        inside_xy = shapely.contains_xy(prism.footprint, x, y)
+        z_top = prism.evaluate_z_top(x, y)
+        inside_z = (z >= prism.z_low) & (z <= z_top)
+        return inside_xy & inside_z
+
+    def _any_prism_contains(self, prisms: list[Prism], x, y, z):
+        was_scalar = np.isscalar(x) and np.isscalar(y) and np.isscalar(z)
+        x = np.atleast_1d(np.asarray(x, dtype=np.float64))
+        y = np.atleast_1d(np.asarray(y, dtype=np.float64))
+        z = np.atleast_1d(np.asarray(z, dtype=np.float64))
+        out = np.zeros_like(x, dtype=bool)
+        for p in prisms:
+            out |= self._point_in_prism(p, x, y, z)
+        return _scalar_or_array(out, was_scalar)
+
+    # Public membership API ----------------------------------------------------
+    def point_in_approach_prism(self, x, y, z, rwy_id: Optional[str] = None):
+        """True if (x,y,z) is inside any *approach* prism (optionally restricted to one runway)."""
+        return self._any_prism_contains(self._prisms_for(APPROACH, rwy_id), x, y, z)
+
+    def point_in_departure_prism(self, x, y, z, rwy_id: Optional[str] = None):
+        """True if (x,y,z) is inside any *takeoff-climb* prism (optionally restricted to one runway)."""
+        return self._any_prism_contains(self._prisms_for(TAKEOFF, rwy_id), x, y, z)
+
+    def point_in_missed_approach(self, x, y, z, rwy_id: Optional[str] = None):
+        """True if (x,y,z) is inside the missed-approach prism (takeoff-climb of the same RWY ID).
+
+        Modelling note: in the absence of an explicit missed-approach geometry
+        in `code4_precision.yaml`, we use the takeoff-climb surface for the
+        same runway designation — i.e. straight-ahead climb from the stop end,
+        which is the standard ICAO PANS-OPS construct for non-published GA.
+        """
+        return self.point_in_departure_prism(x, y, z, rwy_id)
+
+    def point_in_static_protection(self, x, y, z):
+        """True if (x,y,z) is inside any always-on (runway-config-agnostic) prism."""
+        return self._any_prism_contains(self._static_prisms, x, y, z)
+
+    # ---------------------------------------------------------------- per-prism signed 3-D distance
+    @staticmethod
+    def _signed_3d_distance_to_prism(prism: Prism, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
+        """Box-SDF signed distance to a single prism. Negative inside, positive outside."""
+        pts = shapely.points(x, y)
+        # NB: shapely.distance(polygon, point) returns 0 when the point is INSIDE
+        # the polygon (the geometries intersect). For a signed lateral distance we
+        # need the unsigned distance to the boundary instead.
+        d_xy_abs = shapely.distance(prism.footprint.boundary, pts)
+        inside_xy = shapely.contains_xy(prism.footprint, x, y)
+        d_xy = np.where(inside_xy, -d_xy_abs, d_xy_abs)
+
+        z_top = prism.evaluate_z_top(x, y)
+        z_low = prism.z_low
+        dz_above = z - z_top
+        dz_below = z_low - z
+        d_z = np.maximum(dz_above, dz_below)               # >=0 outside [z_low, z_top]
+
+        inside_box = (d_xy <= 0) & (d_z <= 0)
+        # Inside: both negative → closest face is the *least* negative ⇒ max
+        inside_part = np.maximum(d_xy, d_z)
+        # Outside: Euclidean combination of positive parts, plus any lone negative.
+        outside_lat = np.maximum(d_xy, 0.0)
+        outside_vert = np.maximum(d_z, 0.0)
+        outside_part = np.sqrt(outside_lat ** 2 + outside_vert ** 2) \
+                       + np.minimum(np.maximum(d_xy, d_z), 0.0)
+        return np.where(inside_box, inside_part, outside_part).astype(np.float64)
+
+    def _min_signed_distance(self, prisms: list[Prism], x, y, z) -> np.ndarray:
+        x = np.atleast_1d(np.asarray(x, dtype=np.float64))
+        y = np.atleast_1d(np.asarray(y, dtype=np.float64))
+        z = np.atleast_1d(np.asarray(z, dtype=np.float64))
+        if not prisms:
+            return np.full_like(x, np.inf, dtype=np.float64)
+        out = np.full_like(x, np.inf, dtype=np.float64)
+        for p in prisms:
+            d = self._signed_3d_distance_to_prism(p, x, y, z)
+            np.minimum(out, d, out=out)
+        return out
+
+    # ---------------------------------------------------------------- filtered SDF API
+    def sdf_at(self, x, y, z,
+               active_arrivals: Optional[Iterable[str]] = None,
+               active_departures: Optional[Iterable[str]] = None):
+        """Signed distance to the *runway-config-aware* protection union.
+
+        Negative = inside the active protection volume. The union is:
+            (∪ approach prisms for active_arrivals)
+          ∪ (∪ takeoff prisms for active_departures)
+          ∪ (always-on static prisms: runway-strip, transitional, inner-horiz,
+                                       conical, OFZ-inapp, OFZ-intr, RESA)
+
+        If both ``active_arrivals`` and ``active_departures`` are None the
+        filter degenerates to "all approach + all takeoff" (equivalent to the
+        static global SDF — but recomputed from prisms, so values can differ
+        from `SDFQuery.clearance_m` by ≲ 0.5 cell-spacing).
+        """
+        was_scalar = np.isscalar(x) and np.isscalar(y) and np.isscalar(z)
+        keep: list[Prism] = list(self._static_prisms)
+        if active_arrivals is None:
+            keep += self._by_surface.get(APPROACH, [])
+        else:
+            for rid in active_arrivals:
+                keep += self._by_rwy_surface.get((rid, APPROACH), [])
+        if active_departures is None:
+            keep += self._by_surface.get(TAKEOFF, [])
+        else:
+            for rid in active_departures:
+                keep += self._by_rwy_surface.get((rid, TAKEOFF), [])
+        out = self._min_signed_distance(keep, x, y, z)
+        return _scalar_or_array(out, was_scalar)
+
+    def distance_to_active_approach(self, x, y, z,
+                                    active_arrivals: Optional[Iterable[str]] = None):
+        """Signed 3-D distance to the union of approach prisms of the active arrival runways.
+
+        Negative inside an approach prism; positive elsewhere. If
+        ``active_arrivals`` is None, all approach prisms are used.
+        """
+        was_scalar = np.isscalar(x) and np.isscalar(y) and np.isscalar(z)
+        if active_arrivals is None:
+            prisms = list(self._by_surface.get(APPROACH, []))
+        else:
+            prisms = []
+            for rid in active_arrivals:
+                prisms += self._by_rwy_surface.get((rid, APPROACH), [])
+        out = self._min_signed_distance(prisms, x, y, z)
+        return _scalar_or_array(out, was_scalar)
+
+    def distance_to_active_departure(self, x, y, z,
+                                     active_departures: Optional[Iterable[str]] = None):
+        """Signed 3-D distance to the union of takeoff-climb prisms of the active departure runways."""
+        was_scalar = np.isscalar(x) and np.isscalar(y) and np.isscalar(z)
+        if active_departures is None:
+            prisms = list(self._by_surface.get(TAKEOFF, []))
+        else:
+            prisms = []
+            for rid in active_departures:
+                prisms += self._by_rwy_surface.get((rid, TAKEOFF), [])
+        out = self._min_signed_distance(prisms, x, y, z)
+        return _scalar_or_array(out, was_scalar)
+
+    def distance_to_active_missed_approach(self, x, y, z,
+                                           active_arrivals: Optional[Iterable[str]] = None):
+        """Missed-approach climb-surface distance for the currently-arriving runways.
+
+        Aliases :meth:`distance_to_active_departure` with ``active_arrivals``
+        (an aircraft aborting an approach climbs straight ahead on the same
+        runway's takeoff-climb surface — see :meth:`point_in_missed_approach`).
+        """
+        return self.distance_to_active_departure(x, y, z, active_arrivals)

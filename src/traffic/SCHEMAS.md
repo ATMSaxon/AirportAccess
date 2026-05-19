@@ -111,9 +111,12 @@ downstream code can index by whichever name is convenient.
 
 * Consumes D5 OpenSky parquet and D6 METAR parquet from `data-engineer`
   (see `src/data/SCHEMAS.md`).
-* Consumes `A_static` from `geometry-engineer` via `src.geometry.query.SDFQuery`
-  (preferred — `q.sdf > 0`), else falls back to raw `sdf.npz > 0`, else treats
-  envelope as all-clear and warns.
+* Consumes `A_static` from `geometry-engineer` exclusively via
+  `src.geometry.query.SDFQuery` (`A_static = q.sdf > 0`). Reading raw `sdf.npz`
+  directly is deliberately not supported so future grid metadata (terrain
+  bottoms, lateral safety buffers, OFV interactions) flows through automatically.
+  If `SDFQuery` is unavailable, the envelope falls back to all-clear and logs a
+  one-shot warning advising to run `scripts/build_ols.py` first.
 
 ## Stability promise
 

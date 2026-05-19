@@ -44,18 +44,25 @@ from src.utils.logs import get_logger, setup_logging  # noqa: E402
 logger = get_logger(__name__)
 
 
-REMOTE_HOST = "featurize@workspace.featurize.cn"
-REMOTE_PORT = 27749
-REMOTE_DIR = "/home/featurize/work/airportaccess"
-PIP_MIRROR = "https://mirrors.aliyun.com/pypi/simple/"
+DEPLOY_SCRIPT = ROOT / "scripts" / "deploy_featurize.sh"
 
 
 def _run_remote(args: argparse.Namespace) -> int:
-    """rsync this repo to Featurize and re-run the same command server-side."""
-    sshpass = os.environ.get("SSHPASS") or os.environ.get("FEATURIZE_PASSWORD")
-    if not sshpass:
+    """Delegate the remote run to ``scripts/deploy_featurize.sh full <CMD>``.
+
+    The script handles rsync push, Aliyun pip install, ssh exec; we then call
+    ``deploy_featurize.sh pull`` to bring back results/ + models/.
+
+    Requires ``FEATURIZE_PASS`` (preferred) or ``SSHPASS`` env var.
+    """
+    pw = os.environ.get("FEATURIZE_PASS") or os.environ.get("SSHPASS") \
+        or os.environ.get("FEATURIZE_PASSWORD")
+    if not pw:
         raise SystemExit(
-            "remote run requires SSHPASS (or FEATURIZE_PASSWORD) env var")
+            "remote run requires FEATURIZE_PASS (or SSHPASS) env var")
+    if not DEPLOY_SCRIPT.exists():
+        raise SystemExit(f"missing deploy script: {DEPLOY_SCRIPT}")
+
     # Re-build the command line minus `--gpu remote`.
     cmd_tokens = ["python", "scripts/train_risk_field.py",
                   "--model", args.model, "--airport", args.airport]
@@ -67,46 +74,18 @@ def _run_remote(args: argparse.Namespace) -> int:
         cmd_tokens += ["--seed", str(args.seed)]
     remote_cmd = " ".join(shlex.quote(t) for t in cmd_tokens)
 
-    ssh_opts = ["-p", str(REMOTE_PORT), "-o", "StrictHostKeyChecking=accept-new",
-                "-o", "UserKnownHostsFile=/dev/null"]
-    rsync_ssh = f"sshpass -e ssh {' '.join(shlex.quote(o) for o in ssh_opts)}"
-    rsync_cmd = [
-        "sshpass", "-e", "rsync", "-az", "--delete",
-        "--exclude", ".git", "--exclude", "data/raw", "--exclude", ".venv",
-        "--exclude", "__pycache__", "--exclude", "*.zarr",
-        "-e", rsync_ssh,
-        f"{ROOT}/", f"{REMOTE_HOST}:{REMOTE_DIR}/",
-    ]
-    logger.info("rsync to Featurize: %s", " ".join(shlex.quote(t) for t in rsync_cmd))
-    env = os.environ.copy(); env["SSHPASS"] = sshpass
-    res = subprocess.run(rsync_cmd, env=env)
+    env = os.environ.copy(); env["FEATURIZE_PASS"] = pw
+    logger.info("Featurize full: %s", remote_cmd)
+    res = subprocess.run(
+        ["bash", str(DEPLOY_SCRIPT), "full", remote_cmd],
+        env=env, cwd=str(ROOT))
     if res.returncode != 0:
         return res.returncode
 
-    pip_install = (
-        f"pip install -i {PIP_MIRROR} -q "
-        "numpy pandas pyarrow scikit-learn xgboost torch zarr pyyaml pyproj"
-    )
-    remote_full = (
-        f"cd {REMOTE_DIR} && "
-        f"{pip_install} && "
-        f"PYTHONPATH={REMOTE_DIR} {remote_cmd}"
-    )
-    ssh_cmd = ["sshpass", "-e", "ssh"] + ssh_opts + [REMOTE_HOST, remote_full]
-    logger.info("ssh exec on Featurize: %s", remote_cmd)
-    res = subprocess.run(ssh_cmd, env=env)
-    if res.returncode != 0:
-        return res.returncode
-
-    # Pull results back.
-    pull = [
-        "sshpass", "-e", "rsync", "-az",
-        "-e", rsync_ssh,
-        f"{REMOTE_HOST}:{REMOTE_DIR}/results/", f"{ROOT}/results/",
-        f"{REMOTE_HOST}:{REMOTE_DIR}/models/", f"{ROOT}/models/",
-    ]
-    subprocess.run(pull, env=env)
-    return 0
+    logger.info("Featurize pull → results/ + models/")
+    res = subprocess.run(
+        ["bash", str(DEPLOY_SCRIPT), "pull"], env=env, cwd=str(ROOT))
+    return res.returncode
 
 
 def _load_or_build_features(icao: str) -> pd.DataFrame:

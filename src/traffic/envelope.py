@@ -149,42 +149,47 @@ _WARN_NO_GEOMETRY = False
 
 
 def load_static_mask(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
-    """Best-effort load of ``A_static`` (the Annex-14-clear voxel mask).
+    """Load ``A_static`` (the Annex-14-clear voxel mask) via the canonical
+    ``src.geometry.query.SDFQuery`` (per ``src/geometry/INTERFACES.md`` §5).
 
-    Tries ``src.geometry.query.is_clear`` first (if the geometry-engineer has
-    published that interface). Falls back to ``data/processed/<ICAO>/sdf.npz``
-    (the M2 artefact) and treats positive-SDF cells as 'clear'. If neither is
-    available, returns ``None`` and the caller treats A_static as all-clear.
+    We deliberately do **not** read ``sdf.npz`` directly — per geometry-engineer's
+    standing guidance, going through ``SDFQuery`` ensures future grid metadata
+    (terrain bottoms, lateral safety buffers, OFV interactions, …) is picked up
+    automatically.
+
+    Returns
+    -------
+    ndarray[bool] | None
+        Boolean voxel mask (``q.sdf > 0``) with the same shape as ``grid``, or
+        ``None`` if ``SDFQuery`` could not be loaded (in which case the caller
+        treats the envelope as 'all-clear' and a one-shot warning is logged).
     """
     global _WARN_NO_GEOMETRY
-    # Preferred: use geometry-engineer's SDFQuery (per src/geometry/INTERFACES.md §5).
     try:
         from ..geometry.query import SDFQuery         # type: ignore
-        q = SDFQuery.from_airport(icao)
-        if q.sdf.shape == tuple(grid.shape):
-            return (q.sdf > 0.0).astype(bool, copy=False)
-        log.warning("SDFQuery shape %s mismatches grid %s; trying raw sdf.npz",
-                    q.sdf.shape, grid.shape)
     except Exception as e:
-        log.debug("geometry.query.SDFQuery unavailable: %s", e)
-
-    # Fallback: raw sdf.npz read.
-    from ..utils.paths import airport_dir
-    sdf_path = airport_dir(icao, "processed") / "sdf.npz"
-    if sdf_path.exists():
-        try:
-            data = np.load(sdf_path)
-            sdf = data["sdf"] if "sdf" in data.files else data[data.files[0]]
-            if sdf.shape == tuple(grid.shape):
-                return (sdf > 0.0)
-            log.warning("sdf.npz shape %s mismatches grid %s; ignoring", sdf.shape, grid.shape)
-        except Exception as e:
-            log.warning("sdf.npz unreadable: %s", e)
-
-    if not _WARN_NO_GEOMETRY:
-        log.warning("A_static unavailable for %s; treating envelope as 'all-clear'", icao)
-        _WARN_NO_GEOMETRY = True
-    return None
+        if not _WARN_NO_GEOMETRY:
+            log.warning("A_static: SDFQuery import failed (%s); treating envelope "
+                        "as all-clear. Run `scripts/build_ols.py --airport %s` first.",
+                        e, icao)
+            _WARN_NO_GEOMETRY = True
+        return None
+    try:
+        q = SDFQuery.from_airport(icao)
+    except FileNotFoundError as e:
+        if not _WARN_NO_GEOMETRY:
+            log.warning("A_static: no sdf.npz for %s (%s); treating envelope as "
+                        "all-clear. Run `scripts/build_ols.py --airport %s` first.",
+                        icao, e, icao)
+            _WARN_NO_GEOMETRY = True
+        return None
+    if q.sdf.shape != tuple(grid.shape):
+        log.error("A_static: SDFQuery shape %s != VoxelGrid shape %s for %s — "
+                  "treating envelope as all-clear. This indicates a stale SDF; "
+                  "rerun `scripts/build_ols.py --airport %s`.",
+                  q.sdf.shape, grid.shape, icao, icao)
+        return None
+    return (q.sdf > 0.0).astype(bool, copy=False)
 
 
 def envelope_for_slice(grid: VoxelGrid,

@@ -58,10 +58,15 @@ def _ofv_sdf_on_grid(grid_x: np.ndarray, grid_y: np.ndarray, grid_z: np.ndarray,
 
 def build_vertiport_ofv(vid: str, vp: dict, frame: AirportFrame, ax14: dict,
                         arp_elev_m: float,
-                        local_half_m: float = 1500.0,
-                        dx: float = 50.0, dz: float = 30.0,
-                        z_top_m: float = 400.0) -> Dict:
-    """Compute one vertiport's local-OFV SDF on a small grid."""
+                        local_half_m: float = 200.0,
+                        dx: float = 10.0, dz: float = 10.0,
+                        z_top_m: float = 360.0) -> Dict:
+    """Compute one vertiport's local-OFV SDF on a small, dense grid.
+
+    Defaults give ±200 m laterally at 10 m cells and ~360 m vertically at 10 m cells —
+    a ~40×40×~40 grid that fully resolves the FATO + funnel (FATO half-side 8 m,
+    top radius 80 m, funnel height 300 m).
+    """
     ofv = ax14["vertiport_ofv"]
     fato_half = float(ofv["fato_side_m"]) / 2.0
     top_r = float(ofv["ofv_top_radius_m"])

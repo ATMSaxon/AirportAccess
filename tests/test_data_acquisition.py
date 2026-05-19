@@ -83,21 +83,21 @@ def _make_dof_fixture(tmp_path: Path) -> Path:
     """Two synthetic DOF records, fixed-width — positions match DOF_COLS."""
     # Build a 120-char buffer per row, overwriting the slice ranges from DOF_COLS.
     fields = [
-        ("oas_number",   "01-123"),       # (0, 6)
-        ("verif_status", "O"),            # (8, 9)
-        ("country",      "US"),           # (10, 12)
-        ("state",        "CA"),           # (13, 15)
-        ("city",         "Los Angeles    "),  # (16, 33)
-        ("lat_dms",      "33 56 33.00N"), # (35, 47)
-        ("lon_dms",      "118 24 29.0W"), # (49, 61)
-        ("obstacle_type","TOWER            "),  # (62, 80)
-        ("quantity",     " 0001"),        # (83, 88)
-        ("agl_ft",       "  150"),        # (89, 94)
-        ("msl_ft",       " 275 "),        # (95, 100)
-        ("lighting",     "R"),            # (102, 103)
-        ("accuracy_h",   "2"),            # (105, 106)
-        ("accuracy_v",   "B"),            # (108, 109)
-        ("marked",       "M"),            # (110, 111)
+        ("oas_number",   "01-001234"),
+        ("verif_status", "O"),
+        ("country",      "US"),
+        ("state",        "CA"),
+        ("city",         "Los Angeles    "),
+        ("lat_dms",      "33 56 33.00N"),
+        ("lon_dms",      "118 24 29.00W"),
+        ("obstacle_type","TOWER            "),
+        ("quantity",     " 1"),
+        ("agl_ft",       "00150"),
+        ("msl_ft",       "00275"),
+        ("lighting",     "R"),
+        ("accuracy_h",   "2"),
+        ("accuracy_v",   "B"),
+        ("marked",       "M"),
     ]
     buf = list(" " * 120)
     for key, val in fields:

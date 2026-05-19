@@ -106,39 +106,39 @@ def _parse_metar(raw: str) -> dict:
     return out
 
 
-def _parse_metar_csv(text: str) -> pd.DataFrame:
-    """The AWC API returns CSV with a header line. Some rows may be blank."""
-    # The new aviationweather.gov API returns a JSON or CSV depending on `format`.
-    # We request `format=csv`. The first line is a comment; the second is the header.
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    if not lines:
+def _parse_metar_json(payload: list[dict]) -> pd.DataFrame:
+    """The AWC API JSON endpoint returns a list[dict] with structured METAR fields."""
+    if not payload:
         return pd.DataFrame()
-    # Drop leading comment lines
-    while lines and (lines[0].startswith("#") or not "," in lines[0]):
-        lines.pop(0)
-    if not lines:
-        return pd.DataFrame()
-    df = pd.read_csv(io.StringIO("\n".join(lines)), dtype=str, low_memory=False)
-    df.columns = [c.strip().lower() for c in df.columns]
+    df = pd.DataFrame(payload)
+    df.columns = [c.strip() for c in df.columns]
     return df
 
 
+def _parse_metar_raw(text: str) -> pd.DataFrame:
+    """`format=raw` returns one METAR per line."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return pd.DataFrame()
+    return pd.DataFrame({"rawOb": lines})
+
+
 def _normalise_metar_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Map AWC CSV columns to our schema."""
+    """Map AWC JSON columns to our schema."""
+    EMPTY_COLS = ["station_id", "time_utc", "wind_dir_deg", "wind_kt", "wind_gust_kt",
+                  "vis_sm", "temp_c", "dewpoint_c", "altim_hpa", "ceiling_ft",
+                  "flight_rule", "raw"]
     if df.empty:
-        return pd.DataFrame(columns=[
-            "station_id", "time_utc", "wind_dir_deg", "wind_kt", "wind_gust_kt",
-            "vis_sm", "temp_c", "dewpoint_c", "altim_hpa", "ceiling_ft",
-            "flight_rule", "raw"])
+        return pd.DataFrame(columns=EMPTY_COLS)
     col = lambda *names: next((n for n in names if n in df.columns), None)
     out = pd.DataFrame()
-    out["station_id"] = df[col("icaoid", "station_id", "station")].astype(str)
-    # AWC time field is `reportTime` or `obsTime` (UTC epoch seconds or ISO)
-    tcol = col("reporttime", "obstime", "valid_time", "time")
+    sid = col("icaoId", "icaoid", "station_id", "station")
+    out["station_id"] = df[sid].astype(str) if sid else ""
+    # AWC time field is `reportTime` (ISO) or `obsTime` (UTC epoch seconds)
+    tcol = col("reportTime", "reporttime", "obsTime", "obstime", "valid_time", "time")
     if tcol:
         ser = df[tcol]
         if ser.dtype == object:
-            # Try ISO first
             try:
                 out["time_utc"] = pd.to_datetime(ser, utc=True, errors="coerce")
             except Exception:
@@ -146,7 +146,9 @@ def _normalise_metar_df(df: pd.DataFrame) -> pd.DataFrame:
                                                   unit="s", utc=True)
         else:
             out["time_utc"] = pd.to_datetime(ser, unit="s", utc=True)
-    raw_col = col("rawob", "raw_text", "raw_observation", "raw")
+    else:
+        out["time_utc"] = pd.NaT
+    raw_col = col("rawOb", "rawob", "raw_text", "raw_observation", "raw")
     out["raw"] = df[raw_col].astype(str) if raw_col else ""
 
     # Parse from raw to fill numeric fields uniformly
@@ -161,29 +163,37 @@ def _normalise_metar_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _request_metar(station: str, *, hours_before: int = 168) -> pd.DataFrame:
+    """Hit aviationweather.gov `format=json` (only `raw` and `json` are accepted)."""
     params = {
         "ids": station,
-        "format": "csv",
+        "format": "json",
         "hours": hours_before,
         "taf": "false",
     }
     r = http_get(AWC_METAR_API, params=params, timeout=120)
     r.raise_for_status()
-    return _parse_metar_csv(r.text)
+    try:
+        payload = r.json()
+    except Exception:
+        # Fallback: try `raw` and synthesise a minimal frame
+        params["format"] = "raw"
+        r = http_get(AWC_METAR_API, params=params, timeout=120)
+        r.raise_for_status()
+        return _parse_metar_raw(r.text)
+    return _parse_metar_json(payload)
 
 
 def _request_taf(station: str) -> pd.DataFrame:
-    params = {"ids": station, "format": "csv", "hours": 24}
+    params = {"ids": station, "format": "json", "hours": 24}
     r = http_get(AWC_TAF_API, params=params, timeout=60)
     r.raise_for_status()
-    lines = [ln for ln in r.text.splitlines() if ln.strip()]
-    while lines and lines[0].startswith("#"):
-        lines.pop(0)
-    if not lines:
+    try:
+        payload = r.json()
+    except Exception:
         return pd.DataFrame()
-    df = pd.read_csv(io.StringIO("\n".join(lines)), dtype=str, low_memory=False)
-    df.columns = [c.strip().lower() for c in df.columns]
-    return df
+    if not payload:
+        return pd.DataFrame()
+    return pd.DataFrame(payload)
 
 
 def _fetch_era5(airport_cfg: dict, out_dir: Path) -> Path | None:
