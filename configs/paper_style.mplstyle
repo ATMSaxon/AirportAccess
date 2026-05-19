@@ -1,0 +1,24 @@
+# Matplotlib style for TR Part C-ready figures.
+font.family: serif
+font.serif: Times New Roman, DejaVu Serif, serif
+font.size: 9
+axes.labelsize: 9
+axes.titlesize: 10
+xtick.labelsize: 8
+ytick.labelsize: 8
+legend.fontsize: 8
+legend.frameon: False
+figure.dpi: 150
+savefig.dpi: 300
+savefig.bbox: tight
+savefig.pad_inches: 0.02
+axes.linewidth: 0.8
+xtick.major.width: 0.6
+ytick.major.width: 0.6
+xtick.major.size: 3
+ytick.major.size: 3
+lines.linewidth: 1.2
+lines.markersize: 4
+grid.linewidth: 0.4
+grid.alpha: 0.3
+image.cmap: viridis
