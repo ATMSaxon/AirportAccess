@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data import (
-    source_bts, source_faa_dof, source_faa_nasr, source_lawa,
+    source_adsblol, source_bts, source_faa_dof, source_faa_nasr, source_lawa,
     source_noaa_wx, source_opensky, source_osm, source_usgs_3dep,
 )
 from src.data._common import FetchResult, write_offline
@@ -52,6 +52,11 @@ SOURCES: list[tuple[str, object, list[str]]] = [
     ("osm", source_osm, [
         "Overpass servers throttle aggressively. Wait and re-run, or",
         "Use https://overpass-turbo.eu/ to export the same bbox and drop GeoJSON.",
+    ]),
+    ("adsblol", source_adsblol, [
+        "Large download (~2.5 GB/day) from github.com/adsblol/globe_history_2024.",
+        "Re-run with stable connection; per-day resumable.",
+        "For 2024 Fridays the prod-0 release tag is present.",
     ]),
     ("opensky", source_opensky, [
         "Register at https://opensky-network.org/",
