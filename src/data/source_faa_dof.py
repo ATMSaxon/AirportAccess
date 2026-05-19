@@ -37,22 +37,24 @@ SOURCE_URL = DOF_PRIMARY
 
 # DOF fixed-width parsing (column ranges per FAA DOF User Manual). Columns are 1-indexed
 # in the manual; Python slices are 0-indexed.
+# Column ranges verified against DAILY DOF.DAT (FAA, 2026). Positions are 0-indexed
+# Python slices; the FAA User Manual uses 1-indexed positions.
 DOF_COLS = {
-    "oas_number":   (0, 6),     # OAS / DOF identifier ("00-NNNNN")
-    "verif_status": (8, 9),     # O = verified, U = unverified
-    "country":      (10, 12),
-    "state":        (13, 15),
-    "city":         (16, 33),
+    "oas_number":   (0, 9),     # OAS / DOF identifier ("CC-NNNNNN")
+    "verif_status": (10, 11),   # O = verified, U = unverified
+    "country":      (12, 14),
+    "state":        (15, 17),
+    "city":         (18, 34),
     "lat_dms":      (35, 47),   # DD MM SS.SSH
-    "lon_dms":      (49, 61),
-    "obstacle_type":(62, 80),
-    "quantity":     (83, 88),
-    "agl_ft":       (89, 94),
-    "msl_ft":       (95, 100),
-    "lighting":     (102, 103),
-    "accuracy_h":   (105, 106),
-    "accuracy_v":   (108, 109),
-    "marked":       (110, 111),
+    "lon_dms":      (48, 61),   # DDD MM SS.SSH
+    "obstacle_type":(62, 79),
+    "quantity":     (80, 83),
+    "agl_ft":       (84, 89),
+    "msl_ft":       (90, 95),
+    "lighting":     (96, 97),
+    "accuracy_h":   (98, 99),
+    "accuracy_v":   (100, 101),
+    "marked":       (102, 103),
 }
 
 # DOF horizontal / vertical accuracy code translation (per User Manual Appendix).
