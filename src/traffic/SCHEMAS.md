@@ -47,12 +47,14 @@ METAR QNH; `z_agl_m = z_msl_m − airport.elev_m`).
 
 ## Runway-config table (written to `runway_config_<date>.parquet`)
 
+### Canonical columns (stable)
+
 | column               | dtype                | description                                              |
 | -------------------- | -------------------- | -------------------------------------------------------- |
-| slice_start          | datetime64[ns, UTC]  | slice start (UTC)                                        |
+| slice_start          | datetime64[ns, UTC]  | slice start (UTC) — *canonical timestamp*                |
 | slice_end            | datetime64[ns, UTC]  | slice end                                                |
-| arrivals_active      | str (CSV) / list[str]| comma-separated active landing runways (sorted)          |
-| departures_active    | str (CSV) / list[str]| comma-separated active departing runways                 |
+| arrivals_active      | str (CSV) / list[str]| **comma**-separated active landing runways (sorted)     |
+| departures_active    | str (CSV) / list[str]| **comma**-separated active departing runways            |
 | n_arrivals           | int                  | number of arrival ops in the slice                       |
 | n_departures         | int                  | number of departure ops in the slice                     |
 | arr_share            | float                | top-1 runway share of arrivals (0–1)                     |
@@ -63,6 +65,18 @@ METAR QNH; `z_agl_m = z_msl_m − airport.elev_m`).
 | flight_rule          | str / null           | mode METAR flight category (VFR/MVFR/IFR/LIFR)           |
 | visibility_sm        | float / nan          | median visibility (statute miles)                        |
 | ceiling_ft           | float / nan          | median lowest BKN/OVC ceiling (ft AGL)                   |
+
+### Downstream alias columns (also stable — consumed by ml/planning)
+
+Populated by `runway_config.rolling_config` and written to the same parquet, so
+downstream code can index by whichever name is convenient.
+
+| column                | dtype                | description                                              |
+| --------------------- | -------------------- | -------------------------------------------------------- |
+| time_utc              | datetime64[ns, UTC]  | duplicate of `slice_start` (ml-engineer convention)      |
+| active_arrivals       | str                  | **semicolon**-separated active landing runways (e.g. `"06L;06R"`) |
+| active_departures     | str                  | **semicolon**-separated active departing runways         |
+| config_id             | str                  | compact label `ARR:<a>+<b>\|DEP:<c>+<d>` (or `"UNKNOWN"`) |
 
 ## Dynamic envelope storage (`envelope_<date>.zarr` or `.npz` fallback)
 

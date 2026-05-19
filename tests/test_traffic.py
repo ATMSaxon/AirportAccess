@@ -280,6 +280,15 @@ def test_rolling_config_and_metar_cross_check(synthetic_airport):
     match_rate = runway_config.metar_match_rate(slices)
     assert match_rate >= 0.8, f"METAR match rate {match_rate:.2f} below 0.8"
 
+    # The downstream alias columns (consumed by ml-engineer / planner) must be present.
+    for col in ("time_utc", "active_arrivals", "active_departures", "config_id"):
+        assert col in slices.columns, f"missing alias column {col}"
+    # And the semicolon-joined format must hold on a non-empty slice.
+    nonempty = slices[slices["n_arrivals"] > 0].iloc[0]
+    assert ";" in nonempty["active_arrivals"] or len(nonempty["active_arrivals"].split(";")) >= 1
+    assert nonempty["config_id"].startswith("ARR:")
+    assert nonempty["time_utc"] == nonempty["slice_start"]
+
 
 def test_envelope_excludes_known_approach_corridor(synthetic_airport):
     """The dynamic envelope must exclude voxels within 3 NM × 1500 ft of an active

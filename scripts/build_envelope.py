@@ -155,6 +155,9 @@ def main(argv=None) -> int:
     # Persist runway config table.
     rconf_path = out_dir / f"runway_config_{args.window}.parquet"
     # Lists -> JSON-encoded strings for parquet portability.
+    # Persist with canonical (list-as-CSV) + downstream alias columns.
+    # `active_arrivals` / `active_departures` / `time_utc` / `config_id` are
+    # already populated by `runway_config.rolling_config` per SCHEMAS.md.
     rconf_to_write = rconf.copy()
     for col in ("arrivals_active", "departures_active"):
         if col in rconf_to_write.columns:

@@ -89,6 +89,8 @@ def run(out_dir: Path, airport_cfg: dict) -> dict:
         if col in rconf_to_write.columns:
             rconf_to_write[col] = rconf_to_write[col].apply(
                 lambda v: ",".join(v) if isinstance(v, (list, tuple)) else v)
+    # Downstream alias columns (`active_arrivals`, `active_departures`, `time_utc`,
+    # `config_id`) are already populated by `rolling_config` — see SCHEMAS.md.
     rconf_to_write.to_parquet(rconf_path, index=False)
 
     env_path = out_dir / "envelope_sanity.zarr"

@@ -137,6 +137,19 @@ def rolling_config(tracks: pd.DataFrame,
             ceiling_ft=ceiling,
         ))
     df = pd.DataFrame([_to_record(r) for r in rows])
+    if df.empty:
+        return df
+
+    # Add the downstream-friendly alias columns documented in
+    # `src/traffic/SCHEMAS.md` "Downstream alias columns". These match the
+    # ml-engineer's `_load_runway_config` adapter (`time_utc`, `config_id`,
+    # `active_arrivals`, `active_departures`) and the planner's expected joins.
+    df["time_utc"] = df["slice_start"]
+    df["active_arrivals"] = df["arrivals_active"].apply(_join_semi)
+    df["active_departures"] = df["departures_active"].apply(_join_semi)
+    df["config_id"] = [
+        _config_id(a, d) for a, d in zip(df["arrivals_active"], df["departures_active"])
+    ]
     return df
 
 
@@ -146,6 +159,36 @@ def _to_record(s: ConfigSlice) -> dict:
     d["arrivals_active"] = list(s.arrivals_active)
     d["departures_active"] = list(s.departures_active)
     return d
+
+
+def _join_semi(v) -> str:
+    """Render a runway list as a ';'-joined string (e.g. '06L;06R').
+
+    Empty / missing → empty string.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple, np.ndarray)):
+        return ";".join(str(x) for x in v)
+    return str(v)
+
+
+def _config_id(arrivals, departures) -> str:
+    """Compact stable label like ``ARR:06L+06R|DEP:07L+07R`` (empty arms omitted).
+
+    All-empty → ``"UNKNOWN"`` so the column is never null (downstream code
+    treats it as a categorical).
+    """
+    arr = "+".join(arrivals) if isinstance(arrivals, (list, tuple)) and arrivals else ""
+    dep = "+".join(departures) if isinstance(departures, (list, tuple)) and departures else ""
+    if not arr and not dep:
+        return "UNKNOWN"
+    parts = []
+    if arr:
+        parts.append(f"ARR:{arr}")
+    if dep:
+        parts.append(f"DEP:{dep}")
+    return "|".join(parts)
 
 
 def _winners(series: pd.Series, share_threshold: float) -> tuple[list[str], float]:

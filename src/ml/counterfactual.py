@@ -96,27 +96,73 @@ class EvtolKinematics:
 
 
 def _load_runway_config(path: Path) -> pd.DataFrame:
-    """Load M3 runway-config parquet.
+    """Load M3 runway-config parquet → normalised schema for the labeller.
 
-    Expected schema (we are permissive on the input):
-      time_utc (datetime64[ns, UTC]),
-      config_id  (str),
-      active_arrivals (str, e.g. "06L;06R"),
-      active_departures (str, e.g. "07L;07R").
+    Accepts traffic-engineer's M3 production schema (`src/traffic/SCHEMAS.md`):
+      slice_start, slice_end, arrivals_active (CSV str), departures_active,
+      metar_wind_dir_deg, metar_wind_kt, visibility_sm, ceiling_ft, flight_rule,
+      arr_share, dep_share.
 
-    If only `active_runways` is present we use it for both arrivals and
-    departures (degenerate single-config case).
+    And the legacy/test schema with `time_utc` / `active_arrivals` /
+    `active_departures` (semicolon-joined).
+
+    Returns a DataFrame with at minimum:
+      time_utc (UTC), config_id, active_arrivals (";"-joined),
+      active_departures, plus per-slice weather columns if present.
     """
-    df = pd.read_parquet(path)
+    df = pd.read_parquet(path).copy()
+    # --- time column ---
     if "time_utc" not in df.columns:
-        raise ValueError(f"{path}: runway-config parquet must have time_utc column")
-    if "config_id" not in df.columns:
-        df["config_id"] = df.get("config", "UNKNOWN")
+        if "slice_start" in df.columns:
+            df["time_utc"] = pd.to_datetime(df["slice_start"], utc=True)
+        else:
+            raise ValueError(
+                f"{path}: runway-config parquet must have time_utc or slice_start")
+    else:
+        df["time_utc"] = pd.to_datetime(df["time_utc"], utc=True)
+
+    # --- arrivals / departures (CSV or ";"-joined or list) ---
+    def _norm_list_col(values) -> pd.Series:
+        def to_semi(v):
+            if v is None:
+                return ""
+            if isinstance(v, (list, tuple, np.ndarray)):
+                return ";".join(str(x) for x in v if str(x))
+            s = str(v)
+            if "," in s:
+                return ";".join(x.strip() for x in s.split(",") if x.strip())
+            return s
+        return values.apply(to_semi)
+
     if "active_arrivals" not in df.columns:
-        # Fall back to active_runways or to all configured runways.
-        df["active_arrivals"] = df.get("active_runways", "")
+        if "arrivals_active" in df.columns:
+            df["active_arrivals"] = _norm_list_col(df["arrivals_active"])
+        elif "active_runways" in df.columns:
+            df["active_arrivals"] = _norm_list_col(df["active_runways"])
+        else:
+            df["active_arrivals"] = ""
+    else:
+        df["active_arrivals"] = _norm_list_col(df["active_arrivals"])
+
     if "active_departures" not in df.columns:
-        df["active_departures"] = df.get("active_runways", df["active_arrivals"])
+        if "departures_active" in df.columns:
+            df["active_departures"] = _norm_list_col(df["departures_active"])
+        elif "active_runways" in df.columns:
+            df["active_departures"] = _norm_list_col(df["active_runways"])
+        else:
+            df["active_departures"] = df["active_arrivals"]
+    else:
+        df["active_departures"] = _norm_list_col(df["active_departures"])
+
+    # --- config_id ---
+    if "config_id" not in df.columns:
+        if "config" in df.columns:
+            df["config_id"] = df["config"].astype(str)
+        else:
+            df["config_id"] = (
+                df["active_arrivals"].astype(str) + "|" +
+                df["active_departures"].astype(str)
+            )
     return df
 
 

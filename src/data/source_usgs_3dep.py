@@ -43,7 +43,12 @@ def _query_tnm(bbox: tuple[float, float, float, float]) -> list[dict]:
     TNM exposes versioned duplicates of the same spatial tile (e.g. multiple
     `USGS_13_n34w119_*.tif` from different publication dates). We keep only the
     newest version of each spatial tile.
+
+    The TNM Access Lambda occasionally returns a Python-repr error envelope rather
+    than JSON; we treat that as a transient failure and retry once after a short
+    delay before giving up on a product.
     """
+    import time as _time
     items: list[dict] = []
     for product in PRODUCT_NAMES:
         params = {
@@ -52,12 +57,23 @@ def _query_tnm(bbox: tuple[float, float, float, float]) -> list[dict]:
             "max": 32,
             "outputFormat": "JSON",
         }
-        try:
-            r = http_get(TNM_PRODUCTS_API, params=params, timeout=60)
-            r.raise_for_status()
-            data = r.json()
-        except Exception as e:
-            logger.warning("TNM query for %r failed: %s", product, e)
+        data = None
+        for attempt in range(3):
+            try:
+                r = http_get(TNM_PRODUCTS_API, params=params, timeout=60)
+                r.raise_for_status()
+                if not r.text or not r.text.lstrip().startswith(("{", "[")):
+                    raise RuntimeError(
+                        f"TNM returned non-JSON envelope (first 80 chars: "
+                        f"{r.text[:80]!r})"
+                    )
+                data = r.json()
+                break
+            except Exception as e:
+                logger.warning("TNM query for %r failed (attempt %d/3): %s",
+                                product, attempt + 1, e)
+                _time.sleep(5 * (attempt + 1))
+        if data is None:
             continue
         for it in data.get("items", []):
             url = it.get("downloadURL")

@@ -48,13 +48,13 @@ DOF_COLS = {
     "lat_dms":      (35, 47),   # DD MM SS.SSH
     "lon_dms":      (48, 61),   # DDD MM SS.SSH
     "obstacle_type":(62, 79),
-    "quantity":     (80, 83),
-    "agl_ft":       (84, 89),
-    "msl_ft":       (90, 95),
-    "lighting":     (96, 97),
-    "accuracy_h":   (98, 99),
-    "accuracy_v":   (100, 101),
-    "marked":       (102, 103),
+    "quantity":     (80, 82),
+    "agl_ft":       (83, 88),
+    "msl_ft":       (89, 94),
+    "lighting":     (95, 96),
+    "accuracy_h":   (97, 98),
+    "accuracy_v":   (99, 100),
+    "marked":       (101, 102),
 }
 
 # DOF horizontal / vertical accuracy code translation (per User Manual Appendix).
@@ -104,18 +104,22 @@ def _parse_csv(text: str) -> pd.DataFrame:
     return df
 
 
+_OAS_RE = re.compile(r"^\d{1,2}-\d{4,8}$")
+
+
 def _parse_fixed_width(text: str) -> pd.DataFrame:
     """Parse the DAILY DOF fixed-width text format. Skips header lines."""
     rows = []
     for raw in text.splitlines():
-        # Header records begin with "FILE:" or "DOF" — skip
-        if len(raw) < 100 or raw.startswith(("FILE:", "DOF", "Obstacle ID", "----")):
+        if len(raw) < 100:
+            continue
+        # The data records all start with a CC-NNNNNN OAS number. Headers/dividers don't.
+        oas = raw[0:9].strip()
+        if not _OAS_RE.match(oas):
             continue
         rec = {}
         for col, (a, b) in DOF_COLS.items():
             rec[col] = raw[a:b].strip()
-        if not rec["oas_number"] or rec["oas_number"].lower().startswith("obstacle"):
-            continue
         rec["lat_wgs"] = _parse_dms(rec.pop("lat_dms"))
         rec["lon_wgs"] = _parse_dms(rec.pop("lon_dms"))
         rows.append(rec)
