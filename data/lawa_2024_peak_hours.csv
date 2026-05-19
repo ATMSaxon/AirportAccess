@@ -1,0 +1,7 @@
+# LAWA LAX Traffic Generation Report 2024 — Friday August 2024 typical-day peak-hour ground trips.
+# Sourced from the user-supplied proposal §5.1 (LAWA 2024 LAX TGR). All figures in trips (entries+exits).
+# Manifest: file is verified-text, no internet retrieval needed. Cite as: "LAWA 2024 LAX Traffic Generation Report".
+hour_start,hour_end,trips,note
+"08:00","09:00",13157,"AM peak — employee+passenger arrivals"
+"11:00","12:00",14812,"Midday peak"
+"17:00","18:00",13520,"PM peak — passenger departures"
