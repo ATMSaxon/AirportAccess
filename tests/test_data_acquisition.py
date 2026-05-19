@@ -80,25 +80,34 @@ def test_faa_nasr_lax_writes_parquet(klax_cfg, out_dir):
 # D2: FAA DOF — synthetic fixed-width file
 # --------------------------------------------------------------------------- #
 def _make_dof_fixture(tmp_path: Path) -> Path:
-    """Two synthetic DOF records, fixed-width."""
-    rows = []
-    # OAS lat/lon for a point right next to LAX ARP
-    rec = (
-        "01-12345  O  US CA Los Angeles      "  # 0..33
-        "33 56 33.00N "                          # 35..47
-        "118 24 29.00W "                         # 49..61
-        "TOWER             "                     # 62..80
-        " 0001"                                   # 83..88 quantity
-        "  150"                                   # 89..94 agl_ft
-        "  275"                                   # 95..100 msl_ft
-        " R"                                      # 102..103 lighting
-        " 2"                                      # 105..106 horiz acc
-        " B"                                      # 108..109 vert acc
-        "M"                                       # 110..111 marked
-    )
-    rows.append(rec.ljust(120))
+    """Two synthetic DOF records, fixed-width — positions match DOF_COLS."""
+    # Build a 120-char buffer per row, overwriting the slice ranges from DOF_COLS.
+    fields = [
+        ("oas_number",   "01-123"),       # (0, 6)
+        ("verif_status", "O"),            # (8, 9)
+        ("country",      "US"),           # (10, 12)
+        ("state",        "CA"),           # (13, 15)
+        ("city",         "Los Angeles    "),  # (16, 33)
+        ("lat_dms",      "33 56 33.00N"), # (35, 47)
+        ("lon_dms",      "118 24 29.0W"), # (49, 61)
+        ("obstacle_type","TOWER            "),  # (62, 80)
+        ("quantity",     " 0001"),        # (83, 88)
+        ("agl_ft",       "  150"),        # (89, 94)
+        ("msl_ft",       " 275 "),        # (95, 100)
+        ("lighting",     "R"),            # (102, 103)
+        ("accuracy_h",   "2"),            # (105, 106)
+        ("accuracy_v",   "B"),            # (108, 109)
+        ("marked",       "M"),            # (110, 111)
+    ]
+    buf = list(" " * 120)
+    for key, val in fields:
+        a, b = source_faa_dof.DOF_COLS[key]
+        s = val[: (b - a)].ljust(b - a)
+        for i, ch in enumerate(s):
+            buf[a + i] = ch
+    row = "".join(buf)
     p = tmp_path / "DAILY_DOF.DAT"
-    p.write_text("\n".join(rows) + "\n", encoding="latin-1")
+    p.write_text(row + "\n", encoding="latin-1")
     return p
 
 

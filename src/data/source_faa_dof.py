@@ -60,11 +60,13 @@ VERT_ACCURACY_FT = {"A": 3, "B": 10, "C": 20, "D": 50, "E": 125, "F": 250, "G": 
 
 
 def _parse_dms(s: str) -> float:
-    """'DD MM SS.SSH' → signed decimal degrees. Returns NaN on failure."""
+    """'DD MM SS.SSH' (or 'DD-MM-SS.SSH') → signed decimal degrees. NaN on failure."""
     s = s.strip()
     if not s:
         return float("nan")
-    m = re.match(r"^\s*(\d+)\s+(\d+)\s+([\d\.]+)\s*([NSEW])\s*$", s)
+    # DOF lat/lon: degrees, minutes, seconds, hemisphere — separators are spaces in the
+    # current DAILY DOF and hyphens in some older formats. Accept both.
+    m = re.match(r"^\s*(\d+)[\s\-]+(\d+)[\s\-]+([\d\.]+)\s*([NSEW])\s*$", s)
     if not m:
         return float("nan")
     d, mn, sec, hemi = m.groups()
