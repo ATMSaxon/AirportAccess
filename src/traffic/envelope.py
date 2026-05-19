@@ -157,13 +157,18 @@ def load_static_mask(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
     available, returns ``None`` and the caller treats A_static as all-clear.
     """
     global _WARN_NO_GEOMETRY
-    try:                                            # preferred path
-        from ..geometry import query as gquery     # type: ignore
-        if hasattr(gquery, "is_clear"):
-            return gquery.is_clear(icao=icao, grid=grid)
+    # Preferred: use geometry-engineer's SDFQuery (per src/geometry/INTERFACES.md §5).
+    try:
+        from ..geometry.query import SDFQuery         # type: ignore
+        q = SDFQuery.from_airport(icao)
+        if q.sdf.shape == tuple(grid.shape):
+            return (q.sdf > 0.0).astype(bool, copy=False)
+        log.warning("SDFQuery shape %s mismatches grid %s; trying raw sdf.npz",
+                    q.sdf.shape, grid.shape)
     except Exception as e:
-        log.debug("geometry.query.is_clear unavailable: %s", e)
+        log.debug("geometry.query.SDFQuery unavailable: %s", e)
 
+    # Fallback: raw sdf.npz read.
     from ..utils.paths import airport_dir
     sdf_path = airport_dir(icao, "processed") / "sdf.npz"
     if sdf_path.exists():
@@ -225,14 +230,26 @@ def save_envelope_zarr(envelopes: dict[str, np.ndarray],
 
     try:
         import zarr
+        zver = tuple(int(p) for p in zarr.__version__.split(".")[:2])
         store = zarr.open(str(out_path), mode="w")
-        mask_arr = store.create_dataset(
-            "mask", shape=(T, nx, ny, nz), dtype=bool,
-            chunks=(1, nx, ny, nz),
-        )
-        for i, k in enumerate(ordered_keys):
-            mask_arr[i] = envelopes[k]
-        store.create_dataset("time", data=np.array(ordered_keys, dtype="U32"))
+        if zver >= (3, 0):
+            mask_arr = store.create_array(
+                name="mask", shape=(T, nx, ny, nz), dtype="bool",
+                chunks=(1, nx, ny, nz),
+            )
+            for i, k in enumerate(ordered_keys):
+                mask_arr[i] = envelopes[k]
+            time_arr = np.array(ordered_keys, dtype="U32")
+            store.create_array(name="time", shape=time_arr.shape, dtype=time_arr.dtype)
+            store["time"][:] = time_arr
+        else:                                          # Zarr v2 path
+            mask_arr = store.create_dataset(
+                "mask", shape=(T, nx, ny, nz), dtype=bool,
+                chunks=(1, nx, ny, nz),
+            )
+            for i, k in enumerate(ordered_keys):
+                mask_arr[i] = envelopes[k]
+            store.create_dataset("time", data=np.array(ordered_keys, dtype="U32"))
         store.attrs["grid"] = {
             "x_min": grid.x_min, "x_max": grid.x_max, "dx": grid.dx,
             "y_min": grid.y_min, "y_max": grid.y_max, "dy": grid.dy,

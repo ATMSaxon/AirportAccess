@@ -196,7 +196,7 @@ def fetch(airport_cfg: dict, *, window: str, out_dir: Path,
                 trino_failed = True
 
         # 2) REST fallback — only useful for the current day; mark historical days OFFLINE
-        today = dt.datetime.utcnow().strftime("%Y-%m-%d")
+        today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         if day == today:
             try:
                 df = _fetch_rest_snapshot(bbox, auth=auth)

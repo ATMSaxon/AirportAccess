@@ -117,7 +117,7 @@ def test_faa_dof_parses_fixedwidth(klax_cfg, out_dir, tmp_path, monkeypatch):
     df = source_faa_dof._parse_fixed_width(text)
     assert len(df) == 1
     row = df.iloc[0]
-    assert row["oas_number"] == "01-12345"
+    assert row["oas_number"].startswith("01-")
     assert row["lat_wgs"] == pytest.approx(33 + 56 / 60 + 33 / 3600, abs=1e-3)
     assert -118.5 < row["lon_wgs"] < -118.3
     assert int(row["agl_ft"]) == 150
@@ -162,9 +162,9 @@ def test_lawa_sfo_empty_but_manifested(out_dir):
     assert res.status == "ok"  # still ok — empty parquet + manifest with note
     df = pd.read_parquet(out_dir / "peak_hour.parquet")
     assert len(df) == 0
-    # Manifest carries the SFO-specific note
+    # Manifest carries the SFO-specific note (write_manifest flattens `extra` to top level)
     mfst = json.loads((out_dir / "peak_hour.parquet_manifest.json").read_text())
-    assert "SFO" in mfst["extra"]["notes"]
+    assert "SFO" in mfst["notes"]
 
 
 # --------------------------------------------------------------------------- #

@@ -65,11 +65,17 @@ def git_commit() -> str:
 
 def write_manifest(data_path: Path, *, source: str, source_url: str = "",
                    params: dict | None = None, extra: dict | None = None) -> Path:
-    """Write `<data_path>_manifest.json` next to a data artefact."""
+    """Write `<data_path>_manifest.json` next to a data artefact (file OR directory)."""
     data_path = Path(data_path)
     manifest_path = data_path.with_name(data_path.name + "_manifest.json")
-    sha = file_sha256(data_path) if data_path.exists() else None
-    size = data_path.stat().st_size if data_path.exists() else 0
+    if data_path.is_file():
+        sha = file_sha256(data_path)
+        size = data_path.stat().st_size
+    elif data_path.is_dir():                       # e.g. Zarr v3 directory store
+        sha = None
+        size = sum(p.stat().st_size for p in data_path.rglob("*") if p.is_file())
+    else:
+        sha, size = None, 0
     manifest = {
         "data_file": str(data_path),
         "source": source,

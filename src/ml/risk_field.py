@@ -56,7 +56,7 @@ def _build_model(name: str, *, seed: int = 42):
         from sklearn.preprocessing import StandardScaler
         return Pipeline([
             ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(max_iter=2000, n_jobs=1, random_state=seed)),
+            ("clf", LogisticRegression(max_iter=2000, random_state=seed)),
         ])
     if name == "rf":
         from sklearn.ensemble import RandomForestClassifier

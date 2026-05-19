@@ -27,9 +27,12 @@ from ._common import FetchResult, download_to, great_circle_nm
 
 logger = get_logger(__name__)
 
-# Authoritative public URL (FAA "Digital Products" page).
-DOF_PRIMARY = "https://aeronav.faa.gov/Obst_Data/DAILY_DOF.ZIP"
-DOF_BACKUP = "https://aeronav.faa.gov/Obst_Data/DAILY_DOF.CSV"
+# Authoritative public URLs (FAA "Digital Products" page).
+# As of 2026 the FAA distributes the DAILY DOF as two parallel ZIPs (DAT + CSV).
+DOF_DAT_URL = "https://aeronav.faa.gov/Obst_Data/DAILY_DOF_DAT.ZIP"
+DOF_CSV_URL = "https://aeronav.faa.gov/Obst_Data/DAILY_DOF_CSV.ZIP"
+DOF_PRIMARY = DOF_DAT_URL
+DOF_BACKUP = DOF_CSV_URL
 SOURCE_URL = DOF_PRIMARY
 
 # DOF fixed-width parsing (column ranges per FAA DOF User Manual). Columns are 1-indexed
@@ -124,38 +127,43 @@ def fetch(airport_cfg: dict, *, window: str, out_dir: Path,
 
     cache_dir = path_utils.CACHE / "faa_dof"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = cache_dir / "DAILY_DOF.ZIP"
-    csv_path = cache_dir / "DAILY_DOF.CSV"
+    zip_dat = cache_dir / "DAILY_DOF_DAT.ZIP"
+    zip_csv = cache_dir / "DAILY_DOF_CSV.ZIP"
+    # Backwards-compat: pre-2026 cached file name
+    legacy_zip = cache_dir / "DAILY_DOF.ZIP"
 
-    # Download attempt — try ZIP first, then CSV
-    df_raw: pd.DataFrame | None = None
+    # Download attempt — try DAT ZIP first, then CSV ZIP
     last_err: Exception | None = None
-    if not (zip_path.exists() or csv_path.exists()):
+    if not (zip_dat.exists() or zip_csv.exists() or legacy_zip.exists()):
         try:
-            download_to(DOF_PRIMARY, zip_path, timeout=180)
+            download_to(DOF_DAT_URL, zip_dat, timeout=180)
         except Exception as e:
             last_err = e
-            logger.warning("DOF ZIP download failed (%s); trying CSV", e)
+            logger.warning("DOF DAT ZIP download failed (%s); trying CSV ZIP", e)
             try:
-                download_to(DOF_BACKUP, csv_path, timeout=180)
+                download_to(DOF_CSV_URL, zip_csv, timeout=180)
             except Exception as e2:
                 last_err = e2
 
     text = None
-    if zip_path.exists():
+    # Prefer fresh ZIPs over any legacy cache
+    for zp in (zip_dat, zip_csv, legacy_zip):
+        if not zp.exists():
+            continue
         try:
-            with zipfile.ZipFile(zip_path) as zf:
-                name = next((n for n in zf.namelist() if n.upper().endswith((".DAT", ".TXT", ".CSV"))),
-                            zf.namelist()[0])
+            with zipfile.ZipFile(zp) as zf:
+                names = zf.namelist()
+                pref = [n for n in names if n.upper().endswith((".DAT", ".TXT", ".CSV"))]
+                name = pref[0] if pref else names[0]
                 with zf.open(name) as f:
-                    text = f.read().decode("latin-1")
+                    text = f.read().decode("latin-1", errors="replace")
+            break
         except Exception as e:
             last_err = e
-    if text is None and csv_path.exists():
-        text = csv_path.read_text(encoding="latin-1")
+            continue
     if text is None:
         raise RuntimeError(
-            f"Could not obtain DOF data from {DOF_PRIMARY} or {DOF_BACKUP}: {last_err}"
+            f"Could not obtain DOF data from {DOF_DAT_URL} or {DOF_CSV_URL}: {last_err}"
         )
 
     # Decide format by header
@@ -219,8 +227,8 @@ def fetch(airport_cfg: dict, *, window: str, out_dir: Path,
         source="faa_dof",
         source_url=SOURCE_URL,
         params={"airport": icao, "window": window, "radius_nm": radius_nm,
-                "cache_zip": str(zip_path) if zip_path.exists() else None,
-                "cache_csv": str(csv_path) if csv_path.exists() else None},
+                "cache_dat": str(zip_dat) if zip_dat.exists() else None,
+                "cache_csv": str(zip_csv) if zip_csv.exists() else None},
         extra={"obstacle_count": int(len(df))},
     )
     logger.info("FAA DOF: %d obstacles within %.0f NM of %s",

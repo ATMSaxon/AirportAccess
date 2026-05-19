@@ -184,8 +184,11 @@ def label_segment(seg: dict, geom: AirportGeom, kin: EvtolKinematics,
         t0 = pd.Timestamp(seg["t_start_utc"])
         dur = float(seg["duration_s"])
         if dur > 0:
-            t_offsets = (adsb_window_df["time_utc"].to_numpy() - np.datetime64(t0)) \
-                .astype("timedelta64[ms]").astype(np.int64) / 1000.0
+            # `pd.Series - Timestamp` gives a timedelta Series; use pandas to
+            # bypass dtype('O') vs datetime64 mismatch when tz-aware.
+            t_offsets = (
+                pd.to_datetime(adsb_window_df["time_utc"], utc=True) - t0
+            ).dt.total_seconds().to_numpy()
             fs = np.clip(t_offsets / dur, 0.0, 1.0)
             xs = p0[0] + fs * (p1[0] - p0[0])
             ys = p0[1] + fs * (p1[1] - p0[1])
