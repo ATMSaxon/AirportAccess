@@ -545,3 +545,114 @@ def test_envelope_for_slice_with_static_cache(synthetic_airport):
     # e1 and e2 must be byte-identical (same config); e3 must differ from e1.
     assert np.array_equal(e1, e2)
     assert not np.array_equal(e1, e3)
+    # Stub doesn't expose eval_on_grid → cache must report the active_delta path.
+    assert cache.eval_path == "active_delta"
+
+
+class _StubPrismIndexWithEvalOnGrid:
+    """PrismIndex stub that exposes the *new* preferred API
+    (``eval_on_grid`` + ``static_prisms`` + ``prisms_for_surface``).
+
+    Treats each "prism" as an integer label. The static baseline is +0.5
+    everywhere except a small ground obstacle at index (5, 5, 0). Each per-config
+    prism carves a runway-shaped slab into ``out`` via min-reduce.
+    """
+
+    APPROACH_PRISMS = {"27R": "approach_27R", "27L": "approach_27L"}
+    TAKEOFF_PRISMS = {"09L": "takeoff_09L", "09R": "takeoff_09R"}
+
+    def __init__(self, grid):
+        self.grid = grid
+        self.calls_eval = 0
+        self.calls_static_prisms = 0
+        self.last_prisms_seen = []
+
+    # --- public helpers the cache will look for ---
+
+    def static_prisms(self):
+        self.calls_static_prisms += 1
+        return ["static_obstacle"]
+
+    def prisms_for_surface(self, surface, runway_ids=None):
+        if surface == "approach":
+            return [self.APPROACH_PRISMS[r] for r in (runway_ids or []) if r in self.APPROACH_PRISMS]
+        if surface == "takeoff_climb":
+            return [self.TAKEOFF_PRISMS[r] for r in (runway_ids or []) if r in self.TAKEOFF_PRISMS]
+        return []
+
+    def eval_on_grid(self, grid, prisms=None, out=None, log_every=None):
+        self.calls_eval += 1
+        self.last_prisms_seen.append(list(prisms or []))
+        nx, ny, nz = grid.shape
+        if out is None:
+            out = np.full((nx, ny, nz), np.inf, dtype=np.float32)
+        else:
+            out = np.asarray(out, dtype=np.float32)
+        for p in (prisms or []):
+            if p == "static_obstacle":
+                # One small "static obstacle" voxel (always protected).
+                out[5, 5, 0] = np.minimum(out[5, 5, 0], -1.0)
+                # Plus broad +0.5 ambient → set everything else to 0.5 (min with current)
+                ambient = np.full_like(out, 0.5)
+                out = np.minimum(out, ambient)
+            elif p.startswith("approach_"):
+                rwy = p.removeprefix("approach_")
+                # Each approach prism protects a column of voxels at a known index.
+                idx_x = {"27R": 20, "27L": 30}.get(rwy)
+                if idx_x is not None:
+                    out[idx_x, :, :nz] = np.minimum(out[idx_x, :, :nz], -1.0)
+            elif p.startswith("takeoff_"):
+                rwy = p.removeprefix("takeoff_")
+                idx_x = {"09L": 40, "09R": 50}.get(rwy)
+                if idx_x is not None:
+                    out[idx_x, :, :nz] = np.minimum(out[idx_x, :, :nz], -1.0)
+        return out
+
+
+def test_config_static_cache_prefers_eval_on_grid_path(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    stub = _StubPrismIndexWithEvalOnGrid(grid)
+    cache = envelope.ConfigStaticCache(grid, stub)
+
+    assert cache.eval_path == "eval_on_grid"
+    # Static-only baseline was baked ONCE on construction (via static_prisms()).
+    assert stub.calls_static_prisms == 1
+    assert cache._sdf_static_only is not None
+    # First miss kicks one per-config eval_on_grid call; cache hit doesn't.
+    assert stub.calls_eval == 1                          # baseline bake call
+
+    m_a = cache.mask_for(["27R"], ["09L"])
+    assert stub.calls_eval == 2                          # +1 per-config
+    m_b = cache.mask_for(["27R"], ["09L"])               # cache hit → no new eval
+    assert stub.calls_eval == 2
+
+    # Static obstacle (baked) must persist in BOTH masks.
+    assert not m_a[5, 5, 0]
+    # Active approach (27R → x=20) is protected.
+    assert not m_a[20, 0, 0]
+    # Inactive approach (27L → x=30) must be CLEAR — config-aware!
+    assert m_a[30, 0, 0], "inactive runway prism must NOT appear in A_static_t"
+    # Active takeoff (09L → x=40) is protected; inactive 09R (x=50) is clear.
+    assert not m_a[40, 0, 0]
+    assert m_b[50, 0, 0]
+
+    # Different config → different mask, +1 eval_on_grid call.
+    m_c = cache.mask_for(["27L"], ["09R"])
+    assert stub.calls_eval == 3
+    assert m_c[20, 0, 0] and not m_c[30, 0, 0]           # roles swapped
+    assert m_c[40, 0, 0] and not m_c[50, 0, 0]
+    # Baked static obstacle still there.
+    assert not m_c[5, 5, 0]
+
+
+def test_config_static_cache_eval_on_grid_handles_empty_config(synthetic_airport):
+    grid = synthetic_airport["grid"]
+    stub = _StubPrismIndexWithEvalOnGrid(grid)
+    cache = envelope.ConfigStaticCache(grid, stub)
+    # No active runways at all → mask is just the static-only baseline thresholded.
+    m = cache.mask_for([], [])
+    assert m.dtype == bool
+    assert m.shape == tuple(grid.shape)
+    # Static obstacle protected; everywhere else (ambient +0.5) is clear.
+    assert not m[5, 5, 0]
+    assert m[20, 0, 0] and m[40, 0, 0]                   # no per-config closure

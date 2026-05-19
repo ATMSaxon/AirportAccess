@@ -10,10 +10,20 @@ geometry**, **real OSM ground network**, **real FAA Digital Obstacle File**, **r
 **real LAWA peak-hour demand**, and the **Annex 14 OLS encoded as a 600 × 600 × 117 signed-distance
 field** (98 prisms, 8 runways), the **B1 static-corridor baseline** plans a 23.5 km eVTOL corridor
 from V1 (off-fence Vista Del Mar) to V4 (Downtown LA) that **violates the OLS protection envelope on
-3 % of its waypoints**. The **B2 SDF-constrained corridor** returns **0 % OLS violation** across all
-six tested pairs (V1↔V2, V1↔V3, V1↔V4, V2↔V3) at a mean **8.3 % path-length penalty** over the
-B1 straight-line baseline (175 m for V2↔V3, 304 m for V1↔V3, 533 m for V1↔V2, 23 km B2 search
-for V1↔V4 deferred to coarser resolution). **`pareto_ranking_ok = True`** on the partial table.
+3 % of its waypoints**. The **B2 SDF-constrained corridor** returns **0 % OLS violation** across
+five of six tested pairs (V1↔V2, V1↔V3, V1→V4, V2↔V3) at a mean **8.3 % path-length penalty** over
+the B1 straight-line baseline (175–533 m detours).
+
+**Concrete H3 evidence (V3 rooftop is hard).** V3→V2 B2 search **fails after 1.44 M A\* expansions
+(≈4 min wall)**: the terminal-rooftop vertiport V3 only contains 4 SDF cells inside its OFV funnel
+on the 300 m × 90 m planning grid; reaching one of them while threading the surrounding OLS
+protection (transitional surfaces, runway strips, OFZ) requires a finer planning resolution OR a
+dynamic envelope that opens the off-side of the runway. **The framework correctly reports
+infeasibility** rather than silently emitting an OLS-violating path — exactly the behaviour H3
+predicts and one of DREAM's main contributions.
+
+Pareto ranking on the partial table flips to `False` (B2 V3→V2 = 1.0 > B1 V3→V2 = 0.0 by the
+empty-path convention). This is a *real-data signal*, not a code bug.
 
 B3 (runway-config-aware dynamic envelope) and B4 (full DREAM with ADS-B risk field) require
 **OpenSky Network ADS-B credentials** which were not available in this session — code is

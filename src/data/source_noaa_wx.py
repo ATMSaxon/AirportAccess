@@ -32,6 +32,9 @@ logger = get_logger(__name__)
 
 AWC_METAR_API = "https://aviationweather.gov/api/data/metar"
 AWC_TAF_API = "https://aviationweather.gov/api/data/taf"
+# Iowa State ASOS archive — free, station-by-station historical METAR back decades.
+# Reference: https://mesonet.agron.iastate.edu/request/download.phtml
+ASOS_API = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 SOURCE_URL = AWC_METAR_API
 
 
@@ -183,6 +186,69 @@ def _request_metar(station: str, *, hours_before: int = 168) -> pd.DataFrame:
     return _parse_metar_json(payload)
 
 
+def _parse_window(window: str) -> tuple[dt.date, dt.date] | None:
+    """Translate a window tag (`2024-08`, `2024-08-02`, `2024-08-01..2024-09-01`) → date pair.
+
+    For month tags we span the whole calendar month; for single-day we use [day, day+1].
+    For range strings (`A..B`) we use A inclusive, B exclusive."""
+    w = window.strip()
+    if ".." in w:
+        a, b = w.split("..", 1)
+        try:
+            return dt.date.fromisoformat(a), dt.date.fromisoformat(b)
+        except ValueError:
+            return None
+    parts = w.split("-")
+    try:
+        if len(parts) == 3:
+            d = dt.date.fromisoformat(w)
+            return d, d + dt.timedelta(days=1)
+        if len(parts) == 2:
+            y, m = int(parts[0]), int(parts[1])
+            start = dt.date(y, m, 1)
+            end = dt.date(y + (m // 12), (m % 12) + 1, 1)
+            return start, end
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
+def _request_asos_archive(station: str, start: dt.date, end: dt.date) -> pd.DataFrame:
+    """Pull historical METAR from the Iowa State ASOS archive (free, no auth)."""
+    # Strip leading 'K' for the IEM station code (4-letter ICAO with country prefix
+    # removed for US stations).
+    sid = station[1:] if station.startswith("K") and len(station) == 4 else station
+    params = {
+        "station": sid,
+        "data": "metar",
+        "year1": start.year, "month1": start.month, "day1": start.day,
+        "year2": end.year, "month2": end.month, "day2": end.day,
+        "tz": "Etc/UTC",
+        "format": "onlycomma",
+        "latlon": "no",
+        "missing": "M",
+        "trace": "T",
+        "direct": "yes",
+        "report_type": "3",  # MADIS-grade ASOS hourly + special METARs
+        "report_type2": "4",
+    }
+    r = http_get(ASOS_API, params=params, timeout=180)
+    r.raise_for_status()
+    text = r.text
+    if not text or text.strip().startswith("#"):
+        # IEM returns a comment-only response when no data
+        return pd.DataFrame()
+    df = pd.read_csv(io.StringIO(text), low_memory=False, comment="#")
+    if df.empty or "metar" not in df.columns:
+        return pd.DataFrame()
+    # IEM exposes the raw METAR string under the `metar` column; the rest are derived.
+    out = pd.DataFrame()
+    out["station_id"] = df["station"].astype(str)
+    out["time_utc"] = pd.to_datetime(df["valid"], utc=True, errors="coerce")
+    out["raw"] = df["metar"].astype(str)
+    return out
+
+
 def _request_taf(station: str) -> pd.DataFrame:
     params = {"ids": station, "format": "json", "hours": 24}
     r = http_get(AWC_TAF_API, params=params, timeout=60)
@@ -196,8 +262,14 @@ def _request_taf(station: str) -> pd.DataFrame:
     return pd.DataFrame(payload)
 
 
-def _fetch_era5(airport_cfg: dict, out_dir: Path) -> Path | None:
-    """ERA5 single-level via cdsapi (if creds available)."""
+def _fetch_era5(airport_cfg: dict, out_dir: Path,
+                 max_wait_s: float = 120.0) -> Path | None:
+    """ERA5 single-level via cdsapi (if creds available).
+
+    Wraps the blocking ``cdsapi.Client().retrieve(...)`` in a daemon thread with a
+    wall-clock timeout so the orchestrator doesn't stall when CDS is in maintenance
+    (the retrieve() call internally polls forever until the request completes).
+    """
     if not (os.environ.get("CDSAPI_KEY") or (Path.home() / ".cdsapirc").exists()):
         return None
     try:
@@ -205,26 +277,46 @@ def _fetch_era5(airport_cfg: dict, out_dir: Path) -> Path | None:
     except Exception as e:
         logger.warning("cdsapi not installed: %s", e)
         return None
+    import threading
     frame = AirportFrame.from_cfg(airport_cfg)
     lat, lon = frame.lat0, frame.lon0
     area = [lat + 0.5, lon - 0.5, lat - 0.5, lon + 0.5]
     out = out_dir / "era5_surface.nc"
-    c = cdsapi.Client()
-    c.retrieve(
-        "reanalysis-era5-single-levels",
-        {
-            "product_type": "reanalysis",
-            "format": "netcdf",
-            "variable": ["10m_u_component_of_wind", "10m_v_component_of_wind",
-                         "mean_sea_level_pressure", "2m_temperature",
-                         "2m_dewpoint_temperature"],
-            "year": "2024", "month": "08",
-            "day": ["02", "09", "16", "23", "30"],
-            "time": [f"{h:02d}:00" for h in range(24)],
-            "area": area,
-        },
-        str(out),
-    )
+
+    err_slot: list[BaseException | None] = [None]
+
+    def _work() -> None:
+        try:
+            c = cdsapi.Client()
+            c.retrieve(
+                "reanalysis-era5-single-levels",
+                {
+                    "product_type": "reanalysis",
+                    "format": "netcdf",
+                    "variable": ["10m_u_component_of_wind", "10m_v_component_of_wind",
+                                 "mean_sea_level_pressure", "2m_temperature",
+                                 "2m_dewpoint_temperature"],
+                    "year": "2024", "month": "08",
+                    "day": ["02", "09", "16", "23", "30"],
+                    "time": [f"{h:02d}:00" for h in range(24)],
+                    "area": area,
+                },
+                str(out),
+            )
+        except BaseException as e:  # noqa: BLE001 — capture any thread-local error
+            err_slot[0] = e
+
+    t = threading.Thread(target=_work, daemon=True, name="era5-cdsapi")
+    t.start()
+    t.join(timeout=max_wait_s)
+    if t.is_alive():
+        raise TimeoutError(
+            f"ERA5 retrieval exceeded {max_wait_s}s wall-clock budget "
+            "(CDS likely in maintenance / queue saturated). "
+            "Re-run later to obtain the netCDF — the orchestrator continues without it."
+        )
+    if err_slot[0] is not None:
+        raise err_slot[0]
     return out
 
 
@@ -232,18 +324,44 @@ def fetch(airport_cfg: dict, *, window: str, out_dir: Path) -> FetchResult:
     icao = airport_cfg["icao"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # METAR — recent observations + parse from raw
-    df = _request_metar(icao, hours_before=168)
+    # METAR — historical archive (Iowa State ASOS) for windows in the past,
+    # AWC live API for current-week windows. The Iowa State archive serves the
+    # exact same FAA stations as ICAO codes (with 'K' stripped) with date-range
+    # query params and emits raw METAR strings.
+    span = _parse_window(window)
+    today = dt.date.today()
+    source_used = AWC_METAR_API
+    archive_used = False
+    if span and span[1] < today - dt.timedelta(days=2):
+        try:
+            df = _request_asos_archive(icao, span[0], span[1])
+            if not df.empty:
+                archive_used = True
+                source_used = ASOS_API
+                logger.info("ASOS archive: %d raw METAR rows for %s [%s..%s]",
+                            len(df), icao, span[0], span[1])
+            else:
+                logger.warning("ASOS archive returned 0 rows for %s; "
+                               "falling back to AWC live API", icao)
+                df = _request_metar(icao, hours_before=168)
+        except Exception as e:
+            logger.warning("ASOS archive failed (%s); falling back to AWC live API", e)
+            df = _request_metar(icao, hours_before=168)
+    else:
+        df = _request_metar(icao, hours_before=168)
     parsed = _normalise_metar_df(df)
     metar_path = out_dir / "metar.parquet"
     parsed.to_parquet(metar_path, index=False)
+    metar_note = (
+        f"Window {window} ({span[0]}..{span[1]}) from Iowa State ASOS archive."
+        if archive_used else
+        "AWC live API (~7-day window). For pre-2026 windows use Iowa State ASOS archive."
+    )
     io_utils.write_manifest(
-        metar_path, source="noaa_wx_metar", source_url=AWC_METAR_API,
-        params={"airport": icao, "window": window, "hours_before": 168},
-        extra={"row_count": int(len(parsed)),
-               "note": ("AWC live API returns ~7 days; for 2024-08 historical pull use "
-                        "the AWC archive: https://www.aviationweather.gov/dataserver "
-                        "or the NOAA ISD-Lite dataset.")},
+        metar_path, source="noaa_wx_metar", source_url=source_used,
+        params={"airport": icao, "window": window,
+                "archive": "iowa_state_asos" if archive_used else "awc_live"},
+        extra={"row_count": int(len(parsed)), "note": metar_note},
     )
     files = [metar_path.name]
 

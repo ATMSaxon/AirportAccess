@@ -99,12 +99,31 @@ def main() -> int:
     skip = {s.strip() for s in args.skip.split(",") if s.strip()}
     only = {s.strip() for s in args.only.split(",") if s.strip()}
 
-    inventory: dict = {
-        "icao": args.airport,
-        "window": args.window,
-        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "sources": {},
-    }
+    # Merge into existing inventory when running with --only (partial top-up),
+    # otherwise start fresh.
+    inv_path = out_root / "_inventory.json"
+    if only and inv_path.exists():
+        try:
+            import json as _json
+            inventory = _json.loads(inv_path.read_text())
+            inventory.setdefault("sources", {})
+            inventory["icao"] = args.airport
+            inventory["window"] = args.window
+            inventory["generated_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            logger.info("merging into existing inventory (%d prior sources)",
+                        len(inventory["sources"]))
+        except Exception as e:
+            logger.warning("could not parse existing inventory (%s); starting fresh", e)
+            inventory = {"icao": args.airport, "window": args.window,
+                         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                         "sources": {}}
+    else:
+        inventory = {
+            "icao": args.airport,
+            "window": args.window,
+            "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "sources": {},
+        }
 
     overall_t0 = time.time()
     for name, mod, recovery in SOURCES:

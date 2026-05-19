@@ -245,6 +245,25 @@ class PrismIndex:
             return list(self._by_surface.get(surface, []))
         return list(self._by_rwy_surface.get((rwy_id, surface), []))
 
+    def prisms_for_surface(self, surface: str,
+                           runway_ids: Optional[Iterable[str]] = None) -> list[Prism]:
+        """Public lookup: return all prisms of a given surface (optionally filtered to runways).
+
+        Example: `idx.prisms_for_surface("approach", active_arrivals)` returns the
+        approach prisms (each runway has 3 sub-prisms in the Annex-14 3-section model)
+        for every active arrival runway.
+        """
+        if runway_ids is None:
+            return list(self._by_surface.get(surface, []))
+        out: list[Prism] = []
+        for rid in runway_ids:
+            out += self._by_rwy_surface.get((rid, surface), [])
+        return out
+
+    def static_prisms(self) -> list[Prism]:
+        """Return the runway-config-agnostic prism set (strip, transitional, IH, conical, OFZs, RESA)."""
+        return list(self._static_prisms)
+
     # ---------------------------------------------------------------- per-prism membership
     @staticmethod
     def _point_in_prism(prism: Prism, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
@@ -397,3 +416,69 @@ class PrismIndex:
         runway's takeoff-climb surface — see :meth:`point_in_missed_approach`).
         """
         return self.distance_to_active_departure(x, y, z, active_arrivals)
+
+    # ---------------------------------------------------------------- grid-mode evaluator
+    def eval_on_grid(self, grid, prisms: Optional[Iterable[Prism]] = None,
+                     out: Optional[np.ndarray] = None,
+                     log_every: Optional[int] = None) -> np.ndarray:
+        """Min-reduced signed-distance ndarray on a :class:`VoxelGrid` over `prisms`.
+
+        Mathematically equivalent to evaluating
+        :meth:`_signed_3d_distance_to_prism` at every voxel-centre and taking
+        min over `prisms`, but uses ``scipy.ndimage.distance_transform_edt``
+        for the lateral 2-D term — orders of magnitude faster on large grids
+        (~0.4 s/prism on a 600×600 grid vs minutes for the per-point shapely
+        path).
+
+        Use this when you need a *whole-grid* config-aware SDF (e.g. the
+        traffic lane's `ConfigStaticCache`). The recommended decomposition
+        pattern bakes the static-only SDF *once* per airport, then unions in
+        only the active approach/takeoff prisms per config:
+
+            # Bake once per airport (cache the result):
+            sdf_static_only = idx.eval_on_grid(grid, idx.static_prisms())
+
+            # Per (active_arrivals, active_departures) config:
+            arr_prisms = idx.prisms_for_surface(APPROACH, active_arrivals)
+            dep_prisms = idx.prisms_for_surface(TAKEOFF, active_departures)
+            sdf_t = idx.eval_on_grid(
+                grid, arr_prisms + dep_prisms,
+                out=sdf_static_only.astype(np.float32, copy=True),
+            )
+            A_static_t = sdf_t > 0
+
+        On LAX (600×600×117, 100 m × 100 m × 30 m): ~23 s static bake,
+        ~5 s per config (10 active prisms typical). Matches :meth:`sdf_at`
+        to within ≲ 0.5 · √(dx² + dy²) ≈ 70 m laterally (EDT accuracy).
+
+        .. warning::
+           Do **not** seed `out` with the baked `sdf.npz` artefact — that file
+           already contains *all* approach/takeoff prisms (it's the global
+           static SDF), so min-reducing the active subset on top of it just
+           yields the global SDF, not the config-aware one. Use
+           ``idx.eval_on_grid(grid, idx.static_prisms())`` to bake the
+           runway-config-agnostic baseline instead.
+
+        Parameters
+        ----------
+        grid : VoxelGrid
+        prisms : iterable of Prism, optional
+            If None, uses every prism in the index (≡ rebuilds the full static SDF).
+        out : ndarray, optional
+            Pre-allocated (nx, ny, nz) float32 buffer to min-reduce into. When
+            supplied, the result is the union with whatever is already in the
+            buffer — convenient for chaining static + active deltas.
+        log_every : int or None
+            Progress logging cadence (None = silent; default None to avoid log
+            spam in the M3 slice loop).
+
+        Returns
+        -------
+        sdf : np.ndarray, shape `grid.shape`, dtype float32
+            Negative inside the prism union, positive outside.
+        """
+        # Local import keeps the import graph shallow at module load time.
+        from .sdf import build_sdf_from_prisms
+        if prisms is None:
+            prisms = self._prisms
+        return build_sdf_from_prisms(prisms, grid, out=out, log_every=log_every)

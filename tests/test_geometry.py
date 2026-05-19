@@ -229,3 +229,75 @@ def test_prism_index_vector_inputs(synthetic):
     sdfs = idx.sdf_at(xs, ys, zs)
     assert sdfs.shape == (3,)
     assert np.all(np.isfinite(sdfs))
+
+
+def test_prism_index_eval_on_grid_matches_build_sdf(synthetic):
+    """`eval_on_grid` with every prism reproduces the global SDF from build_sdf exactly."""
+    from src.geometry.query import PrismIndex
+    grid = synthetic["grid"]
+    idx = PrismIndex(synthetic["gdf"])
+    sdf_via_eval = idx.eval_on_grid(grid)               # all prisms
+    sdf_via_build = synthetic["sdf"]                    # from build_sdf
+    assert sdf_via_eval.shape == sdf_via_build.shape
+    # Same primitive on both sides → should match to f32 floating-point precision.
+    np.testing.assert_array_equal(sdf_via_eval, sdf_via_build)
+
+
+def test_prism_index_eval_on_grid_active_subset(synthetic):
+    """`eval_on_grid` restricted to a subset matches the global SDF only where those prisms dominate."""
+    from src.geometry.query import PrismIndex
+    from src.geometry.ols_surfaces import APPROACH, TAKEOFF
+    grid = synthetic["grid"]
+    idx = PrismIndex(synthetic["gdf"])
+
+    arr_prisms = idx.prisms_for_surface(APPROACH, ["09"])
+    dep_prisms = idx.prisms_for_surface(TAKEOFF, ["09"])
+    sdf_subset = idx.eval_on_grid(grid, arr_prisms + dep_prisms)
+
+    # Subset SDF is min over a *subset* of the prisms used by the full SDF, so it
+    # must be pointwise ≥ the full SDF (allowing f32 round-off slack).
+    assert np.all(sdf_subset >= synthetic["sdf"] - 1e-3), \
+        "subset SDF must be ≥ full SDF (fewer prisms ⇒ less negative)"
+
+    # Spot check: a voxel deep in RWY 09 section-2 approach (axial ≈ 3 km in,
+    # ceiling z_top ≈ 109 m at section-2 slope). z=50 m is comfortably inside.
+    gx, gy, gz = synthetic["meta"]["grid_x"], synthetic["meta"]["grid_y"], synthetic["meta"]["grid_z"]
+    ix = int(np.argmin(np.abs(gx - (-5000.0))))
+    iy = int(np.argmin(np.abs(gy - 0.0)))
+    iz = int(np.argmin(np.abs(gz - 50.0)))
+    assert sdf_subset[ix, iy, iz] < 0, \
+        f"deep-in-approach voxel should be negative; got {sdf_subset[ix, iy, iz]}"
+
+    # A far-corner voxel: outside every approach/takeoff (and the subset contains no
+    # static prisms) ⇒ positive.
+    ix_far = int(np.argmin(np.abs(gx - (grid.x_max - 1.5 * grid.dx))))
+    iy_far = int(np.argmin(np.abs(gy - (grid.y_max - 1.5 * grid.dy))))
+    iz_far = int(np.argmin(np.abs(gz - (grid.z_max - 1.5 * grid.dz))))
+    assert sdf_subset[ix_far, iy_far, iz_far] > 0
+
+
+def test_prism_index_eval_on_grid_seeded_out_buffer(synthetic):
+    """`out=` seeded buffer unions in additional prisms (the M3 decomposition pattern)."""
+    from src.geometry.query import PrismIndex
+    from src.geometry.ols_surfaces import APPROACH
+    grid = synthetic["grid"]
+    idx = PrismIndex(synthetic["gdf"])
+
+    BIG = np.float32(1e9)
+    seed = np.full(grid.shape, BIG, dtype=np.float32)
+
+    # Empty subset on an all-positive seed → unchanged.
+    out_empty = idx.eval_on_grid(grid, [], out=seed.copy())
+    np.testing.assert_array_equal(out_empty, seed)
+
+    # Approach-only subset → introduces negative voxels (the approach footprint exists in the grid).
+    arr_prisms = idx.prisms_for_surface(APPROACH, ["09"])
+    out_unioned = idx.eval_on_grid(grid, arr_prisms, out=seed.copy())
+    assert np.any(out_unioned < 0), "approach prisms should add negative voxels"
+    assert np.any(out_unioned < seed - 1e-3), "approach prisms should reduce some voxels"
+
+    # Re-seeding with a baked static SDF and adding the same approach prisms can never
+    # *increase* a value (min-reduce monotonicity).
+    static_seed = synthetic["sdf"].astype(np.float32, copy=True)
+    out_chained = idx.eval_on_grid(grid, arr_prisms, out=static_seed.copy())
+    assert np.all(out_chained <= static_seed + 1e-3), "min-reduce can never increase values"

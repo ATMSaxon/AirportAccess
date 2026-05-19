@@ -186,13 +186,16 @@ def main(argv=None) -> int:
             log.warning("--config-aware-static requested but PrismIndex unavailable; "
                         "falling back to global SDFQuery A_static.")
         else:
-            # Static-base + active-delta decomposition (per geometry-engineer's perf note):
-            # the baked sdf_static covers always-on surfaces, and per-slice we only
-            # evaluate the active approach/takeoff prism unions.
-            sdf_static = envelope.load_static_sdf(args.airport, grid)
-            static_cache = envelope.ConfigStaticCache(grid, prism_index, sdf_static=sdf_static)
-            log.info("config-aware A_static enabled (sdf_static %s)",
-                     "baked-in" if sdf_static is not None else "absent")
+            # Corrected static-base + per-config decomposition (per geometry-engineer's
+            # follow-up): ConfigStaticCache auto-bakes the *static-only* baseline via
+            # PrismIndex.eval_on_grid(grid, static_prisms()) — we deliberately do NOT
+            # pass load_static_sdf() here, because that file is the *global* SDF
+            # (it already contains every approach + takeoff prism) and using it as
+            # the baseline would defeat the point of being runway-config-aware.
+            static_cache = envelope.ConfigStaticCache(grid, prism_index)
+            log.info("config-aware A_static enabled (eval_path=%s, static_only_baseline=%s)",
+                     static_cache.eval_path,
+                     "baked" if static_cache._sdf_static_only is not None else "absent")
     if static_cache is None:
         a_static = envelope.load_static_mask(args.airport, grid)
     summary["a_static_available"] = a_static is not None or static_cache is not None

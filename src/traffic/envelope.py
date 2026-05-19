@@ -193,12 +193,15 @@ def load_static_mask(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
 
 
 def load_static_sdf(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
-    """Return the raw float ``A_static`` signed-distance field (not thresholded).
+    """Return the raw float **global** ``A_static`` signed-distance field.
 
-    Used by the config-aware decomposition (static-base + active-delta) so the
-    baked-in always-on prisms (strip, transitional, inner-horizontal, conical,
-    OFZs, RESA) don't have to be re-evaluated per slice. Same source as
-    :func:`load_static_mask` — only the thresholding step is skipped.
+    Same source as :func:`load_static_mask` — only the thresholding step is
+    skipped. This is the *global* OLS union from ``sdf.npz``, i.e. it already
+    contains every approach + takeoff prism in the airport. Suitable for the
+    default (non-config-aware) envelope path and for visualisation, but
+    **NOT** as a base for the runway-config decomposition — for that, use
+    :class:`ConfigStaticCache`, which bakes a separate *static-only* baseline
+    via ``PrismIndex.eval_on_grid(grid, prism_index.static_prisms())``.
     """
     try:
         from ..geometry.query import SDFQuery             # type: ignore
@@ -259,17 +262,27 @@ class ConfigStaticCache:
 
     Implements the two perf wins suggested by geometry-engineer:
 
-    1. **Static-base + active-delta decomposition.** The always-on surfaces
-       are already baked into ``sdf_static`` (loaded via :func:`load_static_sdf`)
-       and never recomputed per slice. Only the active approach/takeoff prism
-       unions are evaluated via PrismIndex per call, then merged with
-       ``np.minimum.reduce``.
+    1. **Static-base + active-delta decomposition (corrected).** The
+       always-on surfaces (strip, transitional, IH, conical, OFZs, RESA) are
+       baked once into a *static-only* SDF via
+       ``PrismIndex.eval_on_grid(grid, prism_index.static_prisms())``. Per
+       slice, only the active approach + takeoff prisms are evaluated and
+       min-reduced into a copy of the baked baseline, via
+       ``eval_on_grid(grid, arr+dep_prisms, out=static.copy())``.
+
+       Note: this **deliberately does not** seed from ``sdf.npz`` /
+       :func:`load_static_sdf`, because that file already includes every
+       approach + takeoff prism in the airport — using it as the base would
+       defeat the point of being runway-config-aware.
+
     2. **Config-keyed memoisation.** Real LAX days typically have ≲ 6–8 distinct
        (arrivals, departures) tuples across 96 slices; the cache turns those
        96 evaluations into ~6–8.
 
-    Falls back gracefully to ``prism_index.sdf_at`` if the active-delta API is
-    not present on the supplied PrismIndex (older geometry builds).
+    Fallback ladder (in case an older geometry build is loaded):
+        eval_on_grid path (preferred, ~30× faster on the LAX grid)
+        → distance_to_active_* deltas (with no static baseline — config-only)
+        → sdf_at(...) on the full meshgrid (legacy, slow)
     """
 
     def __init__(self, grid: VoxelGrid, prism_index,
@@ -279,22 +292,48 @@ class ConfigStaticCache:
             raise ValueError("ConfigStaticCache requires a non-None prism_index")
         self.grid = grid
         self.prism_index = prism_index
-        self.sdf_static = sdf_static                      # may be None
         self._cache: dict[tuple, np.ndarray] = {}
         self._max_entries = max_entries
         self.hits = 0
         self.misses = 0
-        # Pre-build voxel-centre meshgrid once — biggest single allocation, so
-        # we pay it on construction rather than per slice.
-        nx, ny, nz = grid.shape
-        xs = grid.x_min + (np.arange(nx) + 0.5) * grid.dx
-        ys = grid.y_min + (np.arange(ny) + 0.5) * grid.dy
-        zs = grid.z_min + (np.arange(nz) + 0.5) * grid.dz
-        self._X, self._Y, self._Z = np.meshgrid(xs, ys, zs, indexing="ij")
+        # Pick the fastest available eval path.
+        self._has_eval_on_grid = (
+            hasattr(prism_index, "eval_on_grid")
+            and hasattr(prism_index, "static_prisms")
+            and hasattr(prism_index, "prisms_for_surface")
+        )
         self._has_delta_api = (
             hasattr(prism_index, "distance_to_active_approach")
             and hasattr(prism_index, "distance_to_active_departure")
         )
+        # Bake the *static-only* baseline once if we have eval_on_grid. Caller
+        # may also inject one explicitly (useful in tests) — but it MUST be
+        # static-only, not the global sdf.npz. We document this on
+        # `load_static_sdf` so callers don't accidentally pass the wrong thing.
+        self._sdf_static_only: Optional[np.ndarray] = None
+        if sdf_static is not None:
+            self._sdf_static_only = np.asarray(sdf_static, dtype=np.float32)
+        elif self._has_eval_on_grid:
+            statics = prism_index.static_prisms()
+            self._sdf_static_only = np.asarray(
+                prism_index.eval_on_grid(grid, statics), dtype=np.float32,
+            )
+        # Voxel-centre meshgrid (only needed by legacy delta_api / sdf_at paths).
+        self._X = self._Y = self._Z = None
+        if not self._has_eval_on_grid:
+            nx, ny, nz = grid.shape
+            xs = grid.x_min + (np.arange(nx) + 0.5) * grid.dx
+            ys = grid.y_min + (np.arange(ny) + 0.5) * grid.dy
+            zs = grid.z_min + (np.arange(nz) + 0.5) * grid.dz
+            self._X, self._Y, self._Z = np.meshgrid(xs, ys, zs, indexing="ij")
+
+    @property
+    def eval_path(self) -> str:
+        if self._has_eval_on_grid:
+            return "eval_on_grid"
+        if self._has_delta_api:
+            return "active_delta"
+        return "sdf_at"
 
     def mask_for(self, arrivals_active: Iterable[str],
                  departures_active: Iterable[str]) -> np.ndarray:
@@ -315,22 +354,42 @@ class ConfigStaticCache:
     def _compute(self, arrivals_active, departures_active) -> np.ndarray:
         arr = list(arrivals_active) if arrivals_active else []
         dep = list(departures_active) if departures_active else []
+        if self._has_eval_on_grid:
+            from ..geometry.query import APPROACH, TAKEOFF      # local to keep import cheap
+            prisms: list = []
+            if arr:
+                prisms.extend(self.prism_index.prisms_for_surface(APPROACH, arr))
+            if dep:
+                prisms.extend(self.prism_index.prisms_for_surface(TAKEOFF, dep))
+            # Seed from the baked static-only baseline (copy — eval_on_grid mutates `out`).
+            if self._sdf_static_only is not None:
+                out = self._sdf_static_only.copy()
+            else:
+                out = np.full(tuple(self.grid.shape), np.inf, dtype=np.float32)
+            if prisms:
+                sdf_t = np.asarray(
+                    self.prism_index.eval_on_grid(self.grid, prisms, out=out),
+                    dtype=np.float32,
+                )
+            else:
+                sdf_t = out                                       # no active runways → static-only
+            return (sdf_t > 0.0).astype(bool, copy=False)
         if self._has_delta_api:
-            # Active-delta path (cheaper: ~12 prism evals/call vs ~50).
             d_arr = np.asarray(self.prism_index.distance_to_active_approach(
                 self._X, self._Y, self._Z, active_arrivals=arr or None))
             d_dep = np.asarray(self.prism_index.distance_to_active_departure(
                 self._X, self._Y, self._Z, active_departures=dep or None))
             stack = [d_arr, d_dep]
-            if self.sdf_static is not None and self.sdf_static.shape == d_arr.shape:
-                stack.append(self.sdf_static)
+            if self._sdf_static_only is not None and self._sdf_static_only.shape == d_arr.shape:
+                stack.append(self._sdf_static_only)
             sdf_t = np.minimum.reduce(stack)
-        else:                                                # legacy fallback
-            sdf_t = np.asarray(self.prism_index.sdf_at(
-                self._X, self._Y, self._Z,
-                active_arrivals=arr or None,
-                active_departures=dep or None,
-            ))
+            return (sdf_t > 0.0).astype(bool, copy=False)
+        # Last resort.
+        sdf_t = np.asarray(self.prism_index.sdf_at(
+            self._X, self._Y, self._Z,
+            active_arrivals=arr or None,
+            active_departures=dep or None,
+        ))
         return (sdf_t > 0.0).astype(bool, copy=False)
 
     @property
@@ -341,6 +400,7 @@ class ConfigStaticCache:
             "misses": self.misses,
             "unique_configs": len(self._cache),
             "hit_rate": (self.hits / total) if total else 0.0,
+            "eval_path": self.eval_path,
         }
 
 
