@@ -120,11 +120,36 @@ python scripts/eval_safety_capacity_access.py --airport KLAX
 ## 8. Next steps to publication
 
 1. Acquire OpenSky Trino ADS-B credentials and re-run M1 for the 5 LAX Fridays.
+   (Iowa State ASOS archive already wired for historical METAR — data-engineer flagged
+   that the AWC API only serves current-week and switched to ASOS for 2024-08 coverage.)
 2. Train the XGBoost + MLP risk fields on real counterfactuals (GPU: Featurize Blackwell, ready).
 3. Run full B0–B4 sweep across V1–V4 × 3 peak hours × 5 days = 300 corridors.
 4. Repeat on KSFO for external validation.
 5. Render TR Part C figures (`scripts/make_paper_figures.py`).
 6. Inject numbers into `paper/main.tex`.
+
+### Planning-lane follow-ups (post-build, not blockers)
+
+* **Finer planning resolution sweep on V3→V2 B2.** Re-run at native 100 m × 30 m
+  to distinguish aliasing from fundamental infeasibility. Persistent infeasibility at
+  native resolution is the *strongest possible* H3 evidence (SDF-only fundamentally
+  cannot reach the rooftop). If it dissolves we document the resolution dependence in
+  §Methods.
+* **V1→V4 OLS surface attribution.** `safety_for_corridor` already computes
+  `obstacle_margin_min_m`; extract for V1→V4 to identify exactly which OLS surface(s) the
+  straight-line clips (likely inner-horizontal over Downtown LA). Side-bar figure in §Results.
+
+### Honest caveats from the team
+
+* **METAR coverage.** Traffic-engineer verified ~92 % wind coverage at ±90 min tolerance
+  on the real KLAX METAR parquet — the 100 % metar_match figure in the sanity run is
+  artificial (single METAR row in fixture). The 92 % number is the honest one for §Methods.
+* **Envelope kept-fraction.** 0.987 dynamic-closure mean on LAX → ~1.3 % airspace volume
+  shaved per 15-min slice. Small in absolute terms but concentrated exactly where eVTOL
+  corridors want to thread (approach/departure 3 NM × 1500 ft buffer below 5000 ft AGL).
+* **V3 rooftop infeasibility is real**, not a code defect: 3 voxels of inside-funnel at
+  the planning resolution makes the gate geometrically tight. Recovery levers are
+  (a) finer planning resolution, (b) larger FATO, or (c) the B3 dynamic envelope.
 
 ## 9. Build statistics
 
