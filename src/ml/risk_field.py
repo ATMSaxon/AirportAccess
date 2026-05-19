@@ -282,9 +282,9 @@ def predict_risk_grid(*, icao: str, model, feature_cols: list[str],
     root.create_array("x_m", shape=(nx,), dtype=np.float64, chunks=(nx,))[:] = xs
     root.create_array("y_m", shape=(ny,), dtype=np.float64, chunks=(ny,))[:] = ys
     root.create_array("z_msl_m", shape=(nz,), dtype=np.float64, chunks=(nz,))[:] = zs
-    # Time slices as ISO strings (zarr does not store datetime cleanly).
-    t_iso = np.array([pd.Timestamp(t).isoformat() for t in time_slices], dtype="S32")
-    root.create_array("time_utc", shape=(nt,), dtype=t_iso.dtype, chunks=(nt,))[:] = t_iso
+    # Time slices as int64 unix nanoseconds (zarr-v3 friendly).
+    t_ns = np.array([pd.Timestamp(t).value for t in time_slices], dtype=np.int64)
+    root.create_array("time_utc_ns", shape=(nt,), dtype=np.int64, chunks=(nt,))[:] = t_ns
     root.attrs.update({
         "icao": icao,
         "shape_order": "t,x,y,z",
@@ -292,6 +292,8 @@ def predict_risk_grid(*, icao: str, model, feature_cols: list[str],
         "voxel_dy_m": voxel_grid.dy,
         "voxel_dz_m": voxel_grid.dz,
         "feature_cols": list(feature_cols),
+        "time_units": "unix_nanoseconds_utc",
+        "time_iso": [pd.Timestamp(t).isoformat() for t in time_slices],
     })
 
     # Cache per-slice active arrivals/departures + weather row.
@@ -299,7 +301,7 @@ def predict_risk_grid(*, icao: str, model, feature_cols: list[str],
         runway_config_df = runway_config_df.copy()
         runway_config_df["time_utc"] = pd.to_datetime(runway_config_df["time_utc"], utc=True)
 
-    rc_times = runway_config_df["time_utc"].to_numpy()
+    rc_times = pd.to_datetime(runway_config_df["time_utc"], utc=True).reset_index(drop=True)
 
     # Static per-cell features (don't depend on t).
     XX, YY = np.meshgrid(xs, ys, indexing="ij")
@@ -312,7 +314,7 @@ def predict_risk_grid(*, icao: str, model, feature_cols: list[str],
 
     for it, t in enumerate(time_slices):
         # Match nearest runway-config slice.
-        idx = int(np.argmin(np.abs(rc_times - np.datetime64(pd.Timestamp(t)))))
+        idx = int((rc_times - pd.Timestamp(t)).abs().idxmin())
         rc = runway_config_df.iloc[idx]
         arr = [s for s in str(rc.get("active_arrivals", "")).split(";") if s]
         dep = [s for s in str(rc.get("active_departures", "")).split(";") if s]

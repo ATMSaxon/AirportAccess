@@ -88,7 +88,7 @@ Hierarchy:
 /x_m           float64 (NX,)
 /y_m           float64 (NY,)
 /z_msl_m       float64 (NZ,)
-/time_utc      S32 (T,)             ISO-8601 strings
+/time_utc_ns   int64 (T,)           unix nanoseconds (UTC); also in root `time_iso` attr
 ```
 Attributes on the root group:
 * `icao`           — airport ICAO

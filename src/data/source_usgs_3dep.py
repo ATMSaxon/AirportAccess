@@ -30,8 +30,20 @@ PRODUCT_NAMES = (
 )
 
 
+def _tile_key(url: str) -> str:
+    """Extract the spatial tile identifier (e.g. 'n34w119') from a USGS DEM URL."""
+    import re
+    m = re.search(r"([ns]\d{2}[ew]\d{3})", url.lower())
+    return m.group(1) if m else url.lower()
+
+
 def _query_tnm(bbox: tuple[float, float, float, float]) -> list[dict]:
-    """Return TNM JSON items whose product matches our preferred list."""
+    """Return TNM JSON items whose product matches our preferred list.
+
+    TNM exposes versioned duplicates of the same spatial tile (e.g. multiple
+    `USGS_13_n34w119_*.tif` from different publication dates). We keep only the
+    newest version of each spatial tile.
+    """
     items: list[dict] = []
     for product in PRODUCT_NAMES:
         params = {
@@ -54,7 +66,20 @@ def _query_tnm(bbox: tuple[float, float, float, float]) -> list[dict]:
                 items.append(it)
         if items:
             break  # don't mix products
-    return items
+
+    # Deduplicate by spatial tile identifier; keep the URL with the most recent date.
+    def _date_key(it: dict) -> str:
+        import re
+        m = re.search(r"_(\d{8})\.tif", it["downloadURL"].lower())
+        return m.group(1) if m else ""
+
+    by_tile: dict[str, dict] = {}
+    for it in items:
+        key = _tile_key(it["downloadURL"])
+        cur = by_tile.get(key)
+        if cur is None or _date_key(it) > _date_key(cur):
+            by_tile[key] = it
+    return list(by_tile.values())
 
 
 def _mosaic_tiles(tile_paths: list[Path], out_path: Path) -> None:

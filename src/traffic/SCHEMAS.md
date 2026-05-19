@@ -97,9 +97,9 @@ METAR QNH; `z_agl_m = z_msl_m − airport.elev_m`).
 
 * Consumes D5 OpenSky parquet and D6 METAR parquet from `data-engineer`
   (see `src/data/SCHEMAS.md`).
-* Consumes `A_static` from `geometry-engineer` via `src.geometry.query.is_clear`
-  if available, else falls back to `sdf.npz > 0`, else treats envelope as
-  all-clear and warns.
+* Consumes `A_static` from `geometry-engineer` via `src.geometry.query.SDFQuery`
+  (preferred — `q.sdf > 0`), else falls back to raw `sdf.npz > 0`, else treats
+  envelope as all-clear and warns.
 
 ## Stability promise
 

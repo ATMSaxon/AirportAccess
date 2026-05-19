@@ -9,8 +9,8 @@
 | R011 | M1 | `python scripts/acquire_all.py --airport KSFO --window 2024-08` | data-engineer | pending | `data/processed/KSFO/_inventory.json` | |
 | R020 | M2 | `python scripts/build_ols.py --airport KLAX` | geometry-engineer | pending | `data/processed/KLAX/sdf.npz` | Code 4 precision params |
 | R021 | M2 | `python scripts/build_ols.py --airport KSFO` | geometry-engineer | pending | `data/processed/KSFO/sdf.npz` | |
-| R030 | M3 | `python scripts/build_envelope.py --airport KLAX --window 2024-08-02 …` | traffic-engineer | pending | `data/processed/KLAX/envelope_2024-08-02.zarr` | 5 LAX Fridays |
-| R031 | M3 | `python scripts/build_envelope.py --airport KSFO --window 2024-08-02` | traffic-engineer | pending | `data/processed/KSFO/envelope_*.zarr` | |
+| R030 | M3 | `python scripts/build_envelope.py --airport KLAX --window 2024-08-02 --interval 15min` | traffic-engineer | code-ready (waits on M1 ADS-B) | `data/processed/KLAX/envelope_2024-08-02.zarr` | All 5 modules + CLI + 8 passing tests on KSYN; ran end-to-end on synthetic LAX (96 slices, metar_match=1.0). Real run pending OpenSky parquet from data-engineer. |
+| R031 | M3 | `python scripts/build_envelope.py --airport KSFO --window 2024-08-02 --interval 15min` | traffic-engineer | code-ready (waits on M1 ADS-B) | `data/processed/KSFO/envelope_*.zarr` | Same code path; only needs adsb parquet. |
 | R040 | M4 | `python scripts/sample_counterfactuals.py --airport KLAX --n 200000` | ml-engineer | pending | `data/processed/KLAX/counterfactuals.parquet` | Labels via injection |
 | R041 | M4 | `python scripts/train_risk_field.py --model xgb --airport KLAX` | ml-engineer | pending | `results/risk/KLAX/xgb.json` | AUROC target ≥0.80 |
 | R042 | M4 | `python scripts/train_risk_field.py --model mlp --airport KLAX --gpu remote` | ml-engineer | pending | `results/risk/KLAX/mlp.json` | RTX PRO 6000 |
