@@ -1,0 +1,129 @@
+# SFO (KSFO) — San Francisco International Airport
+icao: KSFO
+iata: SFO
+name: San Francisco International Airport
+arp:
+  lat: 37.6189
+  lon: -122.3750
+  elev_ft: 13.0
+  elev_m: 4.0
+utm_zone: 10N
+local_crs_epsg: 32610
+runways:
+  - id: "01L"
+    thr_lat: 37.61239
+    thr_lon: -122.39160
+    end_lat: 37.63322
+    end_lon: -122.37650
+    length_ft: 7650
+    width_ft: 200
+    bearing_deg: 13.7
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "19R"
+    thr_lat: 37.63322
+    thr_lon: -122.37650
+    end_lat: 37.61239
+    end_lon: -122.39160
+    length_ft: 7650
+    width_ft: 200
+    bearing_deg: 193.7
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "01R"
+    thr_lat: 37.61320
+    thr_lon: -122.38767
+    end_lat: 37.62945
+    end_lon: -122.37589
+    length_ft: 8650
+    width_ft: 200
+    bearing_deg: 13.7
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "19L"
+    thr_lat: 37.62945
+    thr_lon: -122.37589
+    end_lat: 37.61320
+    end_lon: -122.38767
+    length_ft: 8650
+    width_ft: 200
+    bearing_deg: 193.7
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "10L"
+    thr_lat: 37.62662
+    thr_lon: -122.39319
+    end_lat: 37.62844
+    end_lon: -122.35825
+    length_ft: 11381
+    width_ft: 200
+    bearing_deg: 117.5
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "28R"
+    thr_lat: 37.62844
+    thr_lon: -122.35825
+    end_lat: 37.62662
+    end_lon: -122.39319
+    length_ft: 11381
+    width_ft: 200
+    bearing_deg: 297.5
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "10R"
+    thr_lat: 37.62255
+    thr_lon: -122.39288
+    end_lat: 37.62425
+    end_lon: -122.36052
+    length_ft: 10602
+    width_ft: 200
+    bearing_deg: 117.5
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "28L"
+    thr_lat: 37.62425
+    thr_lon: -122.36052
+    end_lat: 37.62255
+    end_lon: -122.39288
+    length_ft: 10602
+    width_ft: 200
+    bearing_deg: 297.5
+    code_letter: F
+    code_number: 4
+    precision: true
+extract_box_m:
+  half_x: 30000
+  half_y: 30000
+  z_min: 0
+  z_max: 3500
+grid_resolution_m:
+  xy: 100
+  z: 30
+vertiports:
+  V1:
+    name: "Off-fence remote (San Bruno Point)"
+    lat: 37.6322
+    lon: -122.3895
+    elev_ft: 20.0
+  V2:
+    name: "Landside (Millbrae BART)"
+    lat: 37.6005
+    lon: -122.3866
+    elev_ft: 40.0
+  V3:
+    name: "Terminal-area rooftop (Intl Terminal)"
+    lat: 37.6160
+    lon: -122.3850
+    elev_ft: 200.0
+  V4:
+    name: "City-end (Salesforce Transit Center)"
+    lat: 37.7895
+    lon: -122.3966
+    elev_ft: 270.0

@@ -1,0 +1,134 @@
+# LAX (KLAX) — Los Angeles International Airport
+# ARP and runway data from FAA NASR / Airport Diagrams (public domain).
+icao: KLAX
+iata: LAX
+name: Los Angeles International Airport
+arp:
+  lat: 33.9425
+  lon: -118.4081
+  elev_ft: 125.0     # MSL
+  elev_m: 38.1
+utm_zone: 11N
+local_crs_epsg: 32611
+# Runways (08:R/L are oriented ~080°, 06:R/L unused at LAX; LAX uses 06/24 and 07/25 pairs)
+# Per FAA Airport Diagram (effective 2024). Each entry: (id, threshold_lat, threshold_lon, length_ft, width_ft).
+runways:
+  - id: "06L"
+    thr_lat: 33.94997
+    thr_lon: -118.43151
+    end_lat: 33.94959
+    end_lon: -118.40150
+    length_ft: 8926
+    width_ft: 150
+    bearing_deg: 89.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "24R"
+    thr_lat: 33.94959
+    thr_lon: -118.40150
+    end_lat: 33.94997
+    end_lon: -118.43151
+    length_ft: 8926
+    width_ft: 150
+    bearing_deg: 269.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "06R"
+    thr_lat: 33.93521
+    thr_lon: -118.41922
+    end_lat: 33.93483
+    end_lon: -118.38919
+    length_ft: 10885
+    width_ft: 150
+    bearing_deg: 89.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "24L"
+    thr_lat: 33.93483
+    thr_lon: -118.38919
+    end_lat: 33.93521
+    end_lon: -118.41922
+    length_ft: 10885
+    width_ft: 150
+    bearing_deg: 269.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "07L"
+    thr_lat: 33.93198
+    thr_lon: -118.41943
+    end_lat: 33.93146
+    end_lon: -118.37774
+    length_ft: 11095
+    width_ft: 150
+    bearing_deg: 89.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "25R"
+    thr_lat: 33.93146
+    thr_lon: -118.37774
+    end_lat: 33.93198
+    end_lon: -118.41943
+    length_ft: 11095
+    width_ft: 150
+    bearing_deg: 269.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "07R"
+    thr_lat: 33.93617
+    thr_lon: -118.40183
+    end_lat: 33.93576
+    end_lon: -118.37840
+    length_ft: 8925
+    width_ft: 150
+    bearing_deg: 89.94
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "25L"
+    thr_lat: 33.93576
+    thr_lon: -118.37840
+    end_lat: 33.93617
+    end_lon: -118.40183
+    length_ft: 8925
+    width_ft: 150
+    bearing_deg: 269.94
+    code_letter: F
+    code_number: 4
+    precision: true
+# Box around airport for data extraction (ENU metres relative to ARP)
+extract_box_m:
+  half_x: 30000   # 60 km E–W
+  half_y: 30000   # 60 km N–S
+  z_min: 0
+  z_max: 3500     # 11500 ft above MSL
+grid_resolution_m:
+  xy: 100
+  z: 30
+# Candidate vertiport anchors (lat/lon). V3 rooftop is approximate centroid of TBIT/CTA.
+vertiports:
+  V1:
+    name: "Off-fence remote (Vista Del Mar)"
+    lat: 33.9275
+    lon: -118.4350
+    elev_ft: 30.0
+  V2:
+    name: "Landside ConRAC/Intermodal"
+    lat: 33.9498
+    lon: -118.3725
+    elev_ft: 95.0
+  V3:
+    name: "Terminal-area rooftop (TBIT centroid)"
+    lat: 33.9425
+    lon: -118.4015
+    elev_ft: 195.0   # 100 ft AGL approx
+  V4:
+    name: "Downtown LA / Union Station"
+    lat: 34.0560
+    lon: -118.2370
+    elev_ft: 285.0

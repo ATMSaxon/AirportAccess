@@ -1,0 +1,23 @@
+# Cost weights for envelope-constrained A* corridor planner.
+# π* = argmin Σ (α1 T + α2 E + α3 ρ + α4 N + α5 I).
+# T = flight time (s), E = energy proxy (J), ρ = risk (0–1), N = noise/population exposure (people-m), I = capacity-impact proxy (0–1)
+default:
+  alpha_T: 1.0
+  alpha_E: 0.0005
+  alpha_rho: 200.0
+  alpha_N: 0.001
+  alpha_I: 100.0
+
+# eVTOL operating envelope (a generic lift-cruise design ~ Joby/Archer family)
+evtol:
+  cruise_speed_mps: 67          # ~130 kt
+  climb_speed_mps: 30
+  descent_speed_mps: 25
+  max_climb_rate_mps: 7
+  max_descent_rate_mps: 5
+  max_bank_deg: 25
+  mass_kg: 2300
+  cruise_power_kw: 250
+  hover_power_kw: 850
+  battery_kwh: 130
+  reserve_kwh: 30

@@ -1,0 +1,53 @@
+# Tiny synthetic airport used by scripts/run_sanity.py — no internet needed.
+icao: KSYN
+iata: SYN
+name: Sanity-test synthetic airport
+arp:
+  lat: 0.0
+  lon: 0.0
+  elev_ft: 0.0
+  elev_m: 0.0
+utm_zone: 31N
+local_crs_epsg: 32631
+runways:
+  - id: "09"
+    thr_lat: 0.0
+    thr_lon: 0.0
+    end_lat: 0.0
+    end_lon: 0.0269
+    length_ft: 9842
+    width_ft: 150
+    bearing_deg: 90.0
+    code_letter: F
+    code_number: 4
+    precision: true
+  - id: "27"
+    thr_lat: 0.0
+    thr_lon: 0.0269
+    end_lat: 0.0
+    end_lon: 0.0
+    length_ft: 9842
+    width_ft: 150
+    bearing_deg: 270.0
+    code_letter: F
+    code_number: 4
+    precision: true
+extract_box_m:
+  half_x: 12000
+  half_y: 12000
+  z_min: 0
+  z_max: 2000
+grid_resolution_m:
+  xy: 200
+  z: 50
+vertiports:
+  V_close:
+    name: "Close synthetic vertiport"
+    lat: 0.0
+    lon: -0.005   # ~556 m west of runway threshold
+    elev_ft: 0.0
+  V_far:
+    name: "Far synthetic vertiport"
+    lat: 0.04
+    lon: 0.03
+    elev_ft: 0.0

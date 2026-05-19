@@ -1,0 +1,72 @@
+# Generic Code 4 precision-approach OLS parameterisation.
+# All values are PLACEHOLDER public-secondary-source numbers consistent with the orders of
+# magnitude reported in academic reviews of ICAO Annex 14 OLS; they are not the ICAO normative text.
+# Per-airport calibration should override these by editing this file.
+# Sources:
+#   - Academic review papers on aerodrome obstacle limitation surfaces (open access).
+#   - FAA EB-105A (vertiport) for the 8:1 vertiport approach-departure slope.
+# Cite as: "Code 4 precision approach generic OLS parameterisation (see configs/annex14/code4_precision.yaml)".
+
+approach_surface:
+  # Trapezoidal, starts at runway strip end, widens upward and outward
+  inner_edge_offset_m: 60          # from runway end
+  inner_edge_width_m: 300          # half-width 150 m on each side
+  divergence_each_side: 0.15       # rad of widening (15% per side)
+  length_first_section_m: 3000
+  slope_first_section: 0.02        # 1:50
+  length_second_section_m: 3600
+  slope_second_section: 0.025      # 1:40
+  horizontal_section_length_m: 8400
+  total_length_m: 15000
+
+takeoff_climb_surface:
+  inner_edge_offset_m: 60
+  inner_edge_width_m: 180
+  divergence_each_side: 0.125
+  final_width_m: 1800              # cap
+  slope: 0.02                      # 1:50
+  total_length_m: 15000
+
+transitional_surface:
+  slope: 0.142857                  # 1:7
+  inner_horizontal_height_m: 45.0
+
+inner_horizontal_surface:
+  radius_m: 4000
+  height_above_arp_m: 45.0
+
+conical_surface:
+  slope: 0.05                      # 1:20
+  height_above_inner_horizontal_m: 100.0
+
+runway_strip:
+  width_each_side_m: 150           # total strip half-width
+  end_length_m: 60                 # beyond runway end
+
+resa:                              # runway end safety area
+  length_m: 240
+  width_m: 150
+
+ofz_inner_approach:                # obstacle free zone — inner approach
+  inner_edge_offset_m: 60
+  inner_edge_width_m: 120
+  slope: 0.02
+  length_m: 900
+
+ofz_inner_transitional:
+  slope: 0.333                     # 1:3
+  height_m: 45.0
+
+vertiport_approach_departure:
+  # FAA EB-105A: 8:1 horizontal:vertical
+  inner_edge_offset_m: 0
+  inner_edge_width_m: 16            # 2x FATO half-side
+  divergence_each_side: 0.10
+  slope: 0.125                      # 1:8
+  total_length_m: 1500
+
+vertiport_ofv:
+  fato_side_m: 16
+  ofv_top_radius_m: 80
+  ofv_height_m: 300                 # funnel above FATO
+  ofv_lateral_slope: 0.125          # matches approach/departure
