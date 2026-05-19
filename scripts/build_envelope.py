@@ -44,6 +44,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--config", default=None, help="optional airport YAML override")
     p.add_argument("--output-dir", default=None,
                    help="override `data/processed/<ICAO>/`")
+    p.add_argument("--config-aware-static", action="store_true",
+                   help="use src.geometry.query.PrismIndex to recompute A_static "
+                        "per slice from the active runways (slower but truly "
+                        "runway-config-aware). Default off — uses the global "
+                        "static A_static from SDFQuery.")
     p.add_argument("--debug", action="store_true")
     return p.parse_args(argv)
 
@@ -172,9 +177,19 @@ def main(argv=None) -> int:
     summary["metar_match_rate"] = runway_config.metar_match_rate(rconf)
     summary["n_slices"] = int(len(rconf))
 
-    # Static mask (A_static): try geometry-engineer first, then sdf.npz, else None.
-    a_static = envelope.load_static_mask(args.airport, grid)
-    summary["a_static_available"] = a_static is not None
+    # Static mask (A_static): default → global SDFQuery; opt-in → PrismIndex per slice.
+    prism_index = None
+    a_static = None
+    if args.config_aware_static:
+        prism_index = envelope.load_prism_index(args.airport)
+        if prism_index is None:
+            log.warning("--config-aware-static requested but PrismIndex unavailable; "
+                        "falling back to global SDFQuery A_static.")
+    if prism_index is None:
+        a_static = envelope.load_static_mask(args.airport, grid)
+    summary["a_static_available"] = a_static is not None or prism_index is not None
+    summary["a_static_mode"] = "prism_index" if prism_index is not None else (
+        "sdf_query" if a_static is not None else "all_clear")
 
     # Build per-slice envelope masks.
     envelopes: dict[str, np.ndarray] = {}
@@ -192,6 +207,7 @@ def main(argv=None) -> int:
             departures_active=row["departures_active"] or [],
             weather=wx,
             a_static=a_static,
+            prism_index=prism_index,
         )
         envelopes[row["slice_start"].isoformat()] = e_t
         slice_times.append(row["slice_start"])

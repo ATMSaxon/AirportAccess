@@ -111,12 +111,24 @@ downstream code can index by whichever name is convenient.
 
 * Consumes D5 OpenSky parquet and D6 METAR parquet from `data-engineer`
   (see `src/data/SCHEMAS.md`).
-* Consumes `A_static` from `geometry-engineer` exclusively via
-  `src.geometry.query.SDFQuery` (`A_static = q.sdf > 0`). Reading raw `sdf.npz`
-  directly is deliberately not supported so future grid metadata (terrain
-  bottoms, lateral safety buffers, OFV interactions) flows through automatically.
-  If `SDFQuery` is unavailable, the envelope falls back to all-clear and logs a
-  one-shot warning advising to run `scripts/build_ols.py` first.
+* Consumes `A_static` from `geometry-engineer` via one of two paths, both
+  centralised in `src.traffic.envelope`:
+  1. **Default (global static):** `load_static_mask(icao, grid)` →
+     `src.geometry.query.SDFQuery.from_airport(icao)` and `A_static = q.sdf > 0`.
+     The same mask is reused for every 15-min slice.
+  2. **Opt-in (runway-config-aware):** pass a
+     `src.geometry.query.PrismIndex` (loaded via
+     `envelope.load_prism_index(icao)`) to `envelope_for_slice(..., prism_index=...)`.
+     `A_static_t` is then recomputed per slice as
+     `prism_index.sdf_at(X, Y, Z, active_arrivals, active_departures) > 0`.
+     This relaxes the protection union to only the prisms of currently-active
+     runways (plus always-on static surfaces). Recommended for real LAX/SFO
+     runs once benchmarked; default off to preserve the historical contract.
+  Reading raw `sdf.npz` directly is deliberately not supported so future grid
+  metadata (terrain bottoms, lateral safety buffers, OFV interactions) flows
+  through automatically. If both paths are unavailable, the envelope falls back
+  to all-clear and logs a one-shot warning advising to run
+  `scripts/build_ols.py` first.
 
 ## Stability promise
 

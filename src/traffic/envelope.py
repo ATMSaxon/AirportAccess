@@ -192,14 +192,92 @@ def load_static_mask(icao: str, grid: VoxelGrid) -> Optional[np.ndarray]:
     return (q.sdf > 0.0).astype(bool, copy=False)
 
 
+# ---------------------------------------------------------------------------
+# Opt-in: runway-config-aware A_static via geometry.PrismIndex
+# ---------------------------------------------------------------------------
+
+_WARN_NO_PRISM = False
+
+
+def load_prism_index(icao: str):
+    """Best-effort loader for ``src.geometry.query.PrismIndex``.
+
+    PrismIndex (introduced post-M2) yields a *runway-config-filtered* SDF: only
+    the approach prisms of currently-arriving runways and takeoff prisms of
+    currently-departing runways count toward the protection union, in addition
+    to the always-on static surfaces (strip, transitional, inner-horizontal,
+    conical, OFZs, RESA). Returns ``None`` and warns once if PrismIndex is not
+    available (in which case callers must fall back to ``load_static_mask``).
+    """
+    global _WARN_NO_PRISM
+    try:
+        from ..geometry.query import PrismIndex          # type: ignore
+    except Exception as e:
+        if not _WARN_NO_PRISM:
+            log.warning("PrismIndex unavailable (%s); config-aware A_static disabled.", e)
+            _WARN_NO_PRISM = True
+        return None
+    try:
+        return PrismIndex.from_airport(icao)
+    except (FileNotFoundError, Exception) as e:           # pragma: no cover
+        if not _WARN_NO_PRISM:
+            log.warning("PrismIndex.from_airport(%s) failed (%s); config-aware "
+                        "A_static disabled — falling back to static SDFQuery.",
+                        icao, e)
+            _WARN_NO_PRISM = True
+        return None
+
+
+def static_mask_for_config(grid: VoxelGrid,
+                           prism_index,
+                           arrivals_active: Iterable[str],
+                           departures_active: Iterable[str]) -> np.ndarray:
+    """Return ``A_static_t``: boolean voxel mask filtered to the active config.
+
+    Uses ``prism_index.sdf_at(X, Y, Z, active_arrivals, active_departures) > 0``
+    over the full voxel grid — matches ``VoxelGrid.shape`` exactly. ENU axes
+    (x, y) are evaluated at voxel centres in airport-local coords; z is treated
+    as MSL by adding the airport elevation if the prism_index exposes it,
+    otherwise as raw grid-z (the same convention used by ``SDFQuery``).
+    """
+    nx, ny, nz = grid.shape
+    xs = grid.x_min + (np.arange(nx) + 0.5) * grid.dx
+    ys = grid.y_min + (np.arange(ny) + 0.5) * grid.dy
+    zs = grid.z_min + (np.arange(nz) + 0.5) * grid.dz
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+    sdf_t = prism_index.sdf_at(
+        X, Y, Z,
+        active_arrivals=list(arrivals_active) or None,
+        active_departures=list(departures_active) or None,
+    )
+    return (np.asarray(sdf_t) > 0.0).astype(bool, copy=False)
+
+
 def envelope_for_slice(grid: VoxelGrid,
                        runway_ends: list,
                        arrivals_active: Iterable[str],
                        departures_active: Iterable[str],
                        weather: WeatherState,
-                       a_static: Optional[np.ndarray] = None) -> np.ndarray:
-    """Return ``E_t``: boolean voxel grid where eVTOL is permissible."""
+                       a_static: Optional[np.ndarray] = None,
+                       prism_index=None) -> np.ndarray:
+    """Return ``E_t``: boolean voxel grid where eVTOL is permissible.
+
+    Parameters
+    ----------
+    a_static
+        Pre-loaded *global* static mask from :func:`load_static_mask` (the
+        canonical and historically-stable path). If ``None`` and no
+        ``prism_index`` is given, A_static is treated as all-clear.
+    prism_index
+        Optional :class:`src.geometry.query.PrismIndex`. When supplied,
+        A_static is recomputed *per slice* from the runway-config-aware
+        protection union (``a_static`` is then ignored). This is the
+        recommended path for full "dynamic envelope" semantics.
+    """
     closed = build_closure_mask(grid, runway_ends, arrivals_active, departures_active, weather)
+    if prism_index is not None:
+        a_static_t = static_mask_for_config(grid, prism_index, arrivals_active, departures_active)
+        return a_static_t & (~closed)
     if a_static is None:
         return ~closed
     if a_static.shape != closed.shape:

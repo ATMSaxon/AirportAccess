@@ -74,6 +74,13 @@ class AirportGeom:
     """Bundles per-airport runway geometry + Annex-14 surface parameters.
 
     Use :py:meth:`from_icao` to construct.
+
+    When the geometry-engineer's `data/processed/<ICAO>/ols.gpkg` artefact is
+    present, the SDF + distance methods transparently delegate to
+    `src.geometry.query.PrismIndex` (which covers the full Annex-14 surface
+    union including transitional / inner-horizontal / conical / OFZ / RESA).
+    Otherwise they fall back to the coarse approach-only proxy implemented in
+    this file, which keeps tests on a fresh repo green.
     """
     icao: str
     field_elev_m: float
@@ -82,6 +89,31 @@ class AirportGeom:
     vertiports: dict[str, dict]
     frame: AirportFrame
     extract_box_m: dict = field(default_factory=dict)
+    _prism_index: object | None = field(default=None, repr=False)
+    _prism_load_tried: bool = field(default=False, repr=False)
+
+    # ------------------------------------------------------------------
+    # PrismIndex integration (geometry-engineer's production API).
+    # PrismIndex z-convention is **AGL above ARP**; our `z_msl_m` is MSL,
+    # so we subtract `field_elev_m` before delegating.
+    # ------------------------------------------------------------------
+    def _to_agl(self, z_msl_m):
+        # Accept scalar or ndarray transparently.
+        return z_msl_m - self.field_elev_m
+
+    @property
+    def prism_index(self):
+        """Lazy-loaded `PrismIndex.from_airport(icao)`. Returns None on failure
+        (e.g. `ols.gpkg` missing on a fresh repo) so callers can fall back."""
+        if self._prism_load_tried:
+            return self._prism_index
+        self._prism_load_tried = True
+        try:
+            from ..geometry.query import PrismIndex
+            self._prism_index = PrismIndex.from_airport(self.icao)
+        except Exception:                             # noqa: BLE001
+            self._prism_index = None
+        return self._prism_index
 
     @classmethod
     def from_icao(cls, icao: str, annex14_profile: str = "code4_precision") -> "AirportGeom":
@@ -227,6 +259,21 @@ class AirportGeom:
         Negative = inside an active surface (protected airspace intrusion).
         Magnitude = approximate distance to nearest surface (m).
         """
+        # Production path: delegate to geometry-engineer's PrismIndex when the
+        # ols.gpkg artefact exists. PrismIndex's `active_*=None` matches "any"
+        # while `active_*=[]` matches "none", so we always pass an explicit list.
+        idx = self.prism_index
+        if idx is not None:
+            try:
+                z_agl = float(z_msl_m) - self.field_elev_m
+                return float(idx.sdf_at(
+                    float(x), float(y), float(z_agl),
+                    active_arrivals=list(active_arrivals),
+                    active_departures=list(active_departures),
+                ))
+            except Exception:                          # noqa: BLE001
+                pass                                   # fall through to coarse
+
         d_best = math.inf
         sign_inside = False
         for rid in active_arrivals:
@@ -372,15 +419,42 @@ class AirportGeom:
 
     def distance_to_active_approach(self, x: float, y: float, z: float,
                                     active_arrivals: Sequence[str]) -> float:
+        """Unsigned distance (m) to nearest active approach prism.
+
+        Delegates to `PrismIndex.distance_to_active_approach` when available;
+        that returns signed (negative inside), so we abs() before returning to
+        keep the column non-negative per `INTERFACES.md` (C2.d_approach_m).
+        """
         if not active_arrivals:
             return math.inf
+        idx = self.prism_index
+        if idx is not None:
+            try:
+                z_agl = float(z) - self.field_elev_m
+                d = float(idx.distance_to_active_approach(
+                    float(x), float(y), float(z_agl),
+                    active_arrivals=list(active_arrivals)))
+                return abs(d)
+            except Exception:                          # noqa: BLE001
+                pass
         return min(self._approach_distance_proxy(x, y, z, self.runway_by_id(rid))
                    for rid in active_arrivals if self._has_runway(rid))
 
     def distance_to_active_departure(self, x: float, y: float, z: float,
                                      active_departures: Sequence[str]) -> float:
+        """Unsigned distance (m) to nearest active departure prism."""
         if not active_departures:
             return math.inf
+        idx = self.prism_index
+        if idx is not None:
+            try:
+                z_agl = float(z) - self.field_elev_m
+                d = float(idx.distance_to_active_departure(
+                    float(x), float(y), float(z_agl),
+                    active_departures=list(active_departures)))
+                return abs(d)
+            except Exception:                          # noqa: BLE001
+                pass
         return min(self._departure_distance_proxy(x, y, z, self.runway_by_id(rid))
                    for rid in active_departures if self._has_runway(rid))
 

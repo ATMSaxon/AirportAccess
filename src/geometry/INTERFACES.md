@@ -12,7 +12,7 @@ writes everything below into `data/processed/<ICAO>/`:
 |------|---------|
 | `ols.gpkg` (layer `ols`) | GeoPackage of all OLS prism footprints + z-height params (one row per prism). CRS = airport-local AEQD metres. Columns: `name, surface, runway_id, end_id, z_form, z_top_a, z_top_b, z_top_c, z_top_slope, z_top_r0, cx, cy, z_low, geometry`. |
 | `sdf.npz` | `sdf` (nx, ny, nz, float32), `grid_x, grid_y, grid_z` (cell-centre coords, m, ENU around ARP). |
-| `ofv_<VID>.npz` | One per vertiport in the airport YAML. Contains a *local* high-resolution OFV-funnel SDF. Keys: `sdf, grid_x, grid_y, grid_z, centre, fato_half, top_r, height`. |
+| `ofv_<VID>.npz` | One per vertiport in the airport YAML. Contains a *local* high-resolution OFV-funnel SDF (~40×40×40 cells at 10 m spacing, spanning ±200 m laterally and 0–360 m vertically; resolves the 8 m FATO + 80 m top-radius funnel). Keys: `sdf, grid_x, grid_y, grid_z, centre, fato_half, top_r, height`. Typical inside-funnel fraction ≈ 3–4 % (≈ 30 cells in the funnel core). |
 | `<file>_manifest.json` | Source + params + sha256 + git_commit for every artefact above. |
 
 ## 2. Sign conventions
@@ -37,21 +37,38 @@ positive up).
 ## 4. Python API (after running `scripts/build_ols.py`)
 
 ```python
-from src.geometry.query import SDFQuery, SurfaceDistance
+from src.geometry.query import SDFQuery, SurfaceDistance, PrismIndex
 
+# 4.1 Static (run-config agnostic) trilinear SDF
 q = SDFQuery.from_airport("KLAX")
 q.clearance_m(x, y, z)   # float or ndarray; positive = clear
 q.is_clear(x, y, z)      # bool or ndarray
 q.d_OLS(x, y, z)         # alias for clearance_m (positive = outside protection)
 
+# 4.2 2-D distance to per-family footprints (visualisation & ML features)
 sd = SurfaceDistance.from_airport("KLAX")
 sd.d_runway(x, y)        # 2-D distance to nearest runway-strip footprint
 sd.d_approach(x, y)      # 2-D distance to nearest approach surface
 sd.d_departure(x, y)     # 2-D distance to nearest takeoff-climb surface
+
+# 4.3 Per-prism membership + RUNWAY-CONFIG-AWARE filtered SDF (ml / planning)
+idx = PrismIndex.from_airport("KLAX")
+idx.runway_ids()                                              # ['06L','06R','07L','07R','24L','24R','25L','25R']
+idx.point_in_approach_prism(x, y, z, rwy_id="24R")            # bool
+idx.point_in_departure_prism(x, y, z, rwy_id="25L")           # bool
+idx.point_in_missed_approach(x, y, z, rwy_id="24R")           # bool (= takeoff prism of same rwy)
+idx.sdf_at(x, y, z, active_arrivals=["24R","25L"],
+                    active_departures=["24L","25R"])          # filtered signed distance
+idx.distance_to_active_approach(x, y, z, active_arrivals=[...])    # filtered
+idx.distance_to_active_departure(x, y, z, active_departures=[...]) # filtered
 ```
 
-Both classes accept scalars, 1-D arrays, or broadcasted ndarrays. All inputs in
-airport-local ENU metres.
+All methods accept scalars or ndarrays (broadcasted via numpy / shapely 2). All
+spatial inputs are in airport-local ENU metres (see §3). `PrismIndex.sdf_at`
+restricts the union to {approach prisms for *active_arrivals*} ∪ {takeoff
+prisms for *active_departures*} ∪ always-on static prisms (runway-strip,
+transitional, inner-horizontal, conical, OFZs, RESA) — passing `None`
+degenerates to the full static union.
 
 ## 5. Stubs for downstream teams
 
