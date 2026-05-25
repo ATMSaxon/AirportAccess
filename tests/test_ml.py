@@ -18,7 +18,7 @@ from src.ml import counterfactual as cf
 from src.ml._geom import AirportGeom, NM_M, FT_M
 from src.ml.features import extract_features, merge_features_labels, NUMERIC_FEATURES
 from src.ml.conformal import SplitConformal, empirical_coverage, calibrate_split
-from src.ml.risk_field import train
+from src.ml.risk_field import train, _holdout_temporal_split
 from src.utils import config as cfg_io
 
 
@@ -179,3 +179,58 @@ def test_lr_high_auroc_on_separable():
     # Conformal coverage should land near 0.9 on this synthetic task.
     assert "conformal_coverage" in res.metrics
     assert 0.80 <= res.metrics["conformal_coverage"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Multi-day temporal-holdout split (the bug fix)
+# ---------------------------------------------------------------------------
+def test_sample_date_stamped_on_segments(ksyn_geom):
+    """`sample_and_label(sample_date=...)` must stamp every row with the
+    supplied date string and use it in the seg_id prefix."""
+    rc = _runway_config_df(ksyn_geom)
+    df = cf.sample_and_label(
+        icao="KSYN", n=32, seed=7,
+        adsb_df=None, runway_config_df=rc,
+        sample_date="2024-08-09",
+    )
+    assert "sample_date" in df.columns
+    assert (df["sample_date"] == "2024-08-09").all()
+    assert df["seg_id"].str.startswith("KSYN-2024-08-09-").all()
+
+
+def test_temporal_split_uses_sample_date():
+    """`_holdout_temporal_split` must split by ``sample_date`` when present,
+    independent of UTC date of ``mid_t_utc``. This is the bug fix: a single
+    LAX Friday's data straddles UTC midnight (UTC-7) and the old splitter
+    put 294 rows in train and 49706 in test."""
+    rng = np.random.default_rng(0)
+    n = 1000
+    # Construct a df where mid_t_utc dates correlate with sample_date only
+    # for half the rows, to prove the splitter uses sample_date, not mid_t_utc.
+    df = pd.DataFrame({
+        "feat": rng.normal(0, 1, n),
+        "conflict": rng.integers(0, 2, n),
+    })
+    df["sample_date"] = np.where(np.arange(n) < 800, "2024-08-02", "2024-08-09")
+    # Intentionally MIS-aligned mid_t_utc: all rows on 2024-08-15 UTC.
+    df["mid_t_utc"] = pd.Timestamp("2024-08-15 12:00:00", tz="UTC")
+    train_df, test_df = _holdout_temporal_split(df)
+    assert (train_df["sample_date"] == "2024-08-02").all()
+    assert (test_df["sample_date"] == "2024-08-09").all()
+    assert len(train_df) == 800
+    assert len(test_df) == 200
+
+
+def test_temporal_split_falls_back_to_utc_when_no_sample_date():
+    """Backwards-compat: if `sample_date` is absent, fall back to UTC date."""
+    df = pd.DataFrame({
+        "feat": [0.0] * 6,
+        "conflict": [0, 1, 0, 1, 0, 1],
+        "mid_t_utc": pd.to_datetime([
+            "2024-08-02 12:00:00", "2024-08-02 13:00:00", "2024-08-02 14:00:00",
+            "2024-08-09 12:00:00", "2024-08-09 13:00:00", "2024-08-09 14:00:00",
+        ], utc=True),
+    })
+    train_df, test_df = _holdout_temporal_split(df)
+    assert len(train_df) == 3
+    assert len(test_df) == 3
