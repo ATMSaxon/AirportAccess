@@ -137,18 +137,30 @@ def _normalise_metar_df(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
     sid = col("icaoId", "icaoid", "station_id", "station")
     out["station_id"] = df[sid].astype(str) if sid else ""
-    # AWC time field is `reportTime` (ISO) or `obsTime` (UTC epoch seconds)
-    tcol = col("reportTime", "reporttime", "obsTime", "obstime", "valid_time", "time")
+    # AWC time field is `reportTime` (ISO) or `obsTime` (UTC epoch seconds).
+    # ASOS archive path pre-parses to `time_utc` (already datetime64[ns, UTC]); we
+    # accept it as well as the IEM raw `valid` column (ISO strings like
+    # "2024-08-01 00:53") for safety if `_request_asos_archive` is bypassed.
+    tcol = col("time_utc", "reportTime", "reporttime", "obsTime", "obstime",
+               "valid_time", "valid", "time")
     if tcol:
         ser = df[tcol]
-        if ser.dtype == object:
-            try:
+        if pd.api.types.is_datetime64_any_dtype(ser):
+            # Already parsed — just ensure UTC tz.
+            if getattr(ser.dt, "tz", None) is None:
                 out["time_utc"] = pd.to_datetime(ser, utc=True, errors="coerce")
-            except Exception:
-                out["time_utc"] = pd.to_datetime(pd.to_numeric(ser, errors="coerce"),
-                                                  unit="s", utc=True)
+            else:
+                out["time_utc"] = ser.dt.tz_convert("UTC")
+        elif pd.api.types.is_numeric_dtype(ser):
+            # AWC `obsTime` is UTC epoch seconds.
+            out["time_utc"] = pd.to_datetime(ser, unit="s", utc=True, errors="coerce")
         else:
-            out["time_utc"] = pd.to_datetime(ser, unit="s", utc=True)
+            # Object/string column — try ISO parse first, fall back to epoch-seconds.
+            parsed = pd.to_datetime(ser, utc=True, errors="coerce")
+            if parsed.isna().all():
+                parsed = pd.to_datetime(pd.to_numeric(ser, errors="coerce"),
+                                        unit="s", utc=True, errors="coerce")
+            out["time_utc"] = parsed
     else:
         out["time_utc"] = pd.NaT
     raw_col = col("rawOb", "rawob", "raw_text", "raw_observation", "raw")

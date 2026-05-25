@@ -51,6 +51,7 @@ SDF_BUFFER_M = 30.0
 # ---------------------------------------------------------------------------
 SEGMENT_COLUMNS = [
     "seg_id", "vertiport_id", "icao", "config_id",
+    "sample_date",
     "t_start_utc", "t_end_utc", "duration_s",
     "x0_m", "y0_m", "z0_m",
     "x1_m", "y1_m", "z1_m",
@@ -299,6 +300,7 @@ def sample_and_label(*, icao: str, n: int, seed: int = 42,
                      runway_config_df: pd.DataFrame | None = None,
                      time_slice_minutes: int = 15,
                      output_path: Path | None = None,
+                     sample_date: str | None = None,
                      ) -> pd.DataFrame:
     """Sample N counterfactual eVTOL segments for `icao` and label them.
 
@@ -355,10 +357,17 @@ def sample_and_label(*, icao: str, n: int, seed: int = 42,
         mid = (0.5 * (seg["x0_m"] + seg["x1_m"]),
                0.5 * (seg["y0_m"] + seg["y1_m"]),
                0.5 * (seg["z0_m"] + seg["z1_m"]))
+        # Sample-date stamp: explicit kwarg overrides; otherwise derive from
+        # the runway-config slice (UTC date of the slice's midpoint).
+        if sample_date is not None:
+            row_sample_date = str(sample_date)
+        else:
+            row_sample_date = slice_t.strftime("%Y-%m-%d")
         seg.update({
-            "seg_id": f"{icao}-{i:08d}",
+            "seg_id": f"{icao}-{row_sample_date}-{i:08d}",
             "icao": icao,
             "config_id": str(rc.get("config_id", "UNKNOWN")),
+            "sample_date": row_sample_date,
             "t_start_utc": t_start,
             "t_end_utc": t_end,
             "duration_s": float(duration_s),
@@ -388,6 +397,7 @@ def sample_and_label(*, icao: str, n: int, seed: int = 42,
                        source="ml.counterfactual.sample_and_label",
                        params={"icao": icao, "n": n, "seed": seed,
                                "scenario": scenario,
+                               "sample_date": sample_date,
                                "l_min_m": L_MIN_M, "v_min_m": V_MIN_M,
                                "axis_z_max_agl_m": AXIS_Z_MAX_AGL_M,
                                "sdf_buffer_m": SDF_BUFFER_M},

@@ -96,6 +96,8 @@ def _run_synthetic(args, log) -> dict:
     cfg = PlannerConfig.from_cfg(load_scenario("cost_weights"))
     if args.strict_turn:
         cfg = PlannerConfig(**{**cfg.__dict__, "strict_turn": True})
+    if getattr(args, "max_pops", None) is not None:
+        cfg = PlannerConfig(**{**cfg.__dict__, "max_expansions": int(args.max_pops)})
     planner = Planner(inputs, cfg)
     baselines = [b.strip() for b in (args.baseline or "B1,B2,B3,B4").split(",")]
     hours = [int(h) for h in (args.hours or "11").split(",")]
@@ -155,6 +157,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="Enforce hard turn-rate cap (default: soft penalty only)")
     p.add_argument("--no-smooth", action="store_true",
                    help="Skip RDP/Bezier smoothing of the corridor")
+    p.add_argument("--max-pops", type=int, default=None,
+                   help="Cap A* heap pops per corridor before declaring infeasible "
+                        "(sensitivity parameter; default uses PlannerConfig.max_expansions). "
+                        "Recommended 500000 for fast V3-rooftop infeasibility detection.")
     p.add_argument("--synthetic", action="store_true",
                    help="Use the in-memory KSYN synthetic problem (no disk artefacts).")
     p.add_argument("--seed", type=int, default=42)
@@ -182,6 +188,9 @@ def main(argv: list[str] | None = None) -> int:
     cfg = PlannerConfig.from_cfg(cw)
     if args.strict_turn:
         cfg = PlannerConfig(**{**cfg.__dict__, "strict_turn": True})
+    if args.max_pops is not None:
+        cfg = PlannerConfig(**{**cfg.__dict__, "max_expansions": int(args.max_pops)})
+        log.info("A* expansion cap set to %d (--max-pops)", args.max_pops)
 
     pairs = _parse_pairs(args.vertiport, args.pair)
     dates = _parse_dates(args.date)

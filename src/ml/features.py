@@ -176,9 +176,16 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
 def merge_features_labels(features_df: pd.DataFrame,
                           labels_df: pd.DataFrame,
                           label_col: str = "conflict") -> pd.DataFrame:
-    """Inner join on seg_id, keep features + label + mid_t_utc (for time-split)."""
+    """Inner join on seg_id, keep features + label + mid_t_utc + sample_date.
+
+    ``sample_date`` is carried through when present so the trainer can build a
+    per-day holdout (first N-1 sample_dates → train, last sample_date → test).
+    """
+    keep_cols = ["seg_id", "mid_t_utc", label_col]
+    if "sample_date" in labels_df.columns:
+        keep_cols.append("sample_date")
     out = features_df.merge(
-        labels_df[["seg_id", "mid_t_utc", label_col]],
+        labels_df[keep_cols],
         on="seg_id", how="inner")
     return out
 

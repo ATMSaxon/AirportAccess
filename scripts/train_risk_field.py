@@ -88,21 +88,66 @@ def _run_remote(args: argparse.Namespace) -> int:
     return res.returncode
 
 
-def _load_or_build_features(icao: str) -> pd.DataFrame:
-    """Load `features.parquet` or build it from `counterfactuals.parquet`."""
+def _load_counterfactuals(icao: str) -> pd.DataFrame:
+    """Load and concat all counterfactuals for an airport.
+
+    Preference order:
+      1. Per-day files ``counterfactuals_<date>.parquet`` (multi-day holdout).
+      2. Single combined ``counterfactuals.parquet`` (legacy / single-day).
+
+    Returns one DataFrame with a ``sample_date`` column populated for every
+    row (back-filled from filename if missing).
+    """
     pdir = paths.PROCESSED / icao
+    per_day = sorted(pdir.glob("counterfactuals_*.parquet"))
+    # Strip out the manifest-sibling pattern just in case (glob already filters by .parquet).
+    if per_day:
+        frames = []
+        for p in per_day:
+            df = pd.read_parquet(p)
+            # Back-fill sample_date from filename if older parquets are missing it.
+            if "sample_date" not in df.columns or df["sample_date"].isna().any():
+                date_str = p.stem.replace("counterfactuals_", "")
+                if "sample_date" not in df.columns:
+                    df["sample_date"] = date_str
+                else:
+                    df["sample_date"] = df["sample_date"].fillna(date_str)
+            frames.append(df)
+            logger.info("counterfactuals: %s (%d rows, %d conflicts)",
+                        p.name, len(df), int(df["conflict"].sum()))
+        return pd.concat(frames, ignore_index=True)
     cf_path = pdir / "counterfactuals.parquet"
     if not cf_path.exists():
         raise SystemExit(
-            f"missing {cf_path} — run scripts/sample_counterfactuals.py first")
+            f"missing counterfactuals under {pdir} — run "
+            f"scripts/sample_counterfactuals.py first")
     seg_df = pd.read_parquet(cf_path)
+    logger.info("counterfactuals: %s (%d rows, legacy single-file)",
+                cf_path.name, len(seg_df))
+    return seg_df
+
+
+def _load_or_build_features(icao: str) -> pd.DataFrame:
+    """Load `features.parquet` (cached) or build it from counterfactuals."""
+    pdir = paths.PROCESSED / icao
+    seg_df = _load_counterfactuals(icao)
 
     feat_path = pdir / "features.parquet"
+    feats: pd.DataFrame
+    rebuild = True
     if feat_path.exists():
-        logger.info("loading cached features: %s", feat_path)
-        feats = pd.read_parquet(feat_path)
-    else:
-        logger.info("building features from %s", cf_path)
+        cached = pd.read_parquet(feat_path)
+        # Cache is only safe to reuse when it covers exactly the same seg_ids.
+        if set(cached["seg_id"]) == set(seg_df["seg_id"]):
+            logger.info("loading cached features: %s (%d rows)",
+                        feat_path, len(cached))
+            feats = cached
+            rebuild = False
+        else:
+            logger.info("features.parquet stale (%d cached vs %d segs) — rebuilding",
+                        len(cached), len(seg_df))
+    if rebuild:
+        logger.info("building features for %s (%d segs)", icao, len(seg_df))
         geom = AirportGeom.from_icao(icao)
         adsb_paths = sorted(pdir.glob("adsb_*.parquet"))
         adsb_df = pd.concat([pd.read_parquet(p) for p in adsb_paths],

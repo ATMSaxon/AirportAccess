@@ -146,20 +146,41 @@ def _build_torch_mlp(seed: int = 42) -> TorchMLP:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-def _holdout_temporal_split(df: pd.DataFrame, time_col: str = "mid_t_utc"
+def _holdout_temporal_split(df: pd.DataFrame, time_col: str = "mid_t_utc",
+                            date_col: str = "sample_date"
                             ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Hold out the latest **calendar date** for test."""
-    t = pd.to_datetime(df[time_col], utc=True)
-    dates = t.dt.date
-    unique_dates = sorted(pd.unique(dates))
+    """Hold out the latest sampling-day for test.
+
+    Preference order for the per-row date key:
+      1. Explicit ``sample_date`` column (stamped by the per-day sampler).
+         This is the correct path for the multi-day temporal holdout: each
+         counterfactual was drawn from a specific Friday's adsb/runway-config
+         window, so the LAST date trains as test and the rest as train.
+      2. Calendar date of ``mid_t_utc`` (UTC). NB: a single LAX/SFO Friday's
+         data straddles two UTC dates because the airport is in UTC-7, which
+         is why the 1-day run produced a 294/49706 split — caller should
+         really use option (1).
+      3. Random 80/20 if only one date is present.
+    """
+    n = len(df)
+    if date_col in df.columns and df[date_col].notna().any():
+        dates = df[date_col].astype(str)
+    else:
+        t = pd.to_datetime(df[time_col], utc=True)
+        dates = t.dt.date.astype(str)
+    unique_dates = sorted(pd.unique(dates.to_numpy()))
     if len(unique_dates) < 2:
         # Fall back to a random 20 % split if we only have one day.
         rng = np.random.default_rng(0)
-        idx = rng.permutation(len(df))
-        cut = int(0.8 * len(df))
+        idx = rng.permutation(n)
+        cut = int(0.8 * n)
         return df.iloc[idx[:cut]].copy(), df.iloc[idx[cut:]].copy()
     test_date = unique_dates[-1]
-    is_test = (dates == test_date)
+    is_test = (dates == test_date).to_numpy()
+    logger.info("temporal-day holdout: train_dates=%s test_date=%s "
+                "(train=%d, test=%d)",
+                unique_dates[:-1], test_date,
+                int((~is_test).sum()), int(is_test.sum()))
     return df.loc[~is_test].copy(), df.loc[is_test].copy()
 
 
