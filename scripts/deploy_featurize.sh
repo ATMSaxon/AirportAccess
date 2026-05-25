@@ -23,7 +23,8 @@ fi
 SSH_CMD=(sshpass -e ssh -o StrictHostKeyChecking=no -o BatchMode=no -p "$FEATURIZE_PORT" "$FEATURIZE_USER@$FEATURIZE_HOST")
 RSYNC_CMD=(sshpass -e rsync -az --delete --stats
   --exclude '.venv/' --exclude '__pycache__/' --exclude '.pytest_cache/'
-  --exclude '.git/' --exclude 'data/cache/' --exclude 'data/raw/' --exclude '.DS_Store'
+  --exclude '.git/' --exclude 'data/cache/' --exclude 'data/raw/' --exclude 'data/processed/'
+  --exclude 'results/' --exclude 'models/' --exclude 'figures/' --exclude '.DS_Store'
   -e "ssh -o StrictHostKeyChecking=no -p $FEATURIZE_PORT")
 PIP="/environment/miniconda3/bin/pip install --timeout 120 --retries 5 -i https://mirrors.aliyun.com/pypi/simple/"
 
