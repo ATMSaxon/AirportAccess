@@ -291,8 +291,21 @@ def _extract_and_filter(tar_path: Path, bbox: tuple[float, float, float, float],
     rows: list[dict] = []
     n_traces = 0
     n_kept_traces = 0
+    truncation_warning = ""
 
-    with tarfile.open(tar_path, mode="r|") as tar:
+    # ``mode="r|"`` is streaming-only (no random access). It is memory-friendly for
+    # the ~2.5 GB tars but fails hard if the archive is truncated mid-stream. We
+    # tolerate per-member gzip errors INSIDE the loop, plus stream-level
+    # truncation by wrapping the whole iteration in a try/except. Whatever we
+    # processed before the truncation is salvaged.
+    try:
+        tar = tarfile.open(tar_path, mode="r|")
+    except (OSError, tarfile.TarError) as e:
+        raise RuntimeError(
+            f"adsblol: tarfile.open failed on {tar_path}: {type(e).__name__}: {e}. "
+            f"Likely a truncated download — delete the cached tar and re-download."
+        )
+    try:
         for member in tar:
             if not member.isfile():
                 continue
@@ -309,15 +322,18 @@ def _extract_and_filter(tar_path: Path, bbox: tuple[float, float, float, float],
             if fileobj is None:
                 continue
             raw = fileobj.read()
-            # readsb writes gzipped traces (file extension is .json but content is gz)
+            # readsb writes gzipped traces (file extension is .json but content is gz).
+            # A handful of blobs per tar are truncated (EOFError) or have CRC errors
+            # (gzip.BadGzipFile / zlib.error → OSError) — skip them silently so one
+            # bad row doesn't abort the ~65k-trace scan.
             if len(raw) >= 2 and raw[:2] == b"\x1f\x8b":
                 try:
                     raw = gzip.decompress(raw)
-                except OSError:
+                except (OSError, EOFError):
                     continue
             try:
                 trace = json.loads(raw)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             icao24 = str(trace.get("icao") or trace.get("hex") or "").lower()
             if not icao24:
@@ -372,8 +388,19 @@ def _extract_and_filter(tar_path: Path, bbox: tuple[float, float, float, float],
                     "vert_rate_ms": (float(vr) * 0.00508) if vr is not None else np.nan,
                     "on_ground": bool(on_ground),
                 })
-    LOG.info("adsblol: %s scanned %s traces, kept %s in bbox; %s state-vectors",
-             tar_path.name, n_traces, n_kept_traces, len(rows))
+    except (EOFError, OSError, tarfile.TarError) as e:
+        # Truncated tar — salvage whatever we processed.
+        truncation_warning = f"{type(e).__name__}: {e}"
+        LOG.warning("adsblol: tar stream ended early at %s traces (%s): %s",
+                    n_traces, tar_path.name, truncation_warning)
+    finally:
+        try:
+            tar.close()
+        except Exception:
+            pass
+    LOG.info("adsblol: %s scanned %s traces, kept %s in bbox; %s state-vectors%s",
+             tar_path.name, n_traces, n_kept_traces, len(rows),
+             f" [TRUNCATED: {truncation_warning}]" if truncation_warning else "")
     if not rows:
         return pd.DataFrame(columns=["time_utc", "icao24", "callsign", "lon_wgs", "lat_wgs",
                                      "baro_alt_m", "geo_alt_m", "velocity_ms", "track_deg",
