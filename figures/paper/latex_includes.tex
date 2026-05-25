@@ -1,0 +1,98 @@
+% =============================================================================
+% DREAM paper — LaTeX include snippets for all figures and tables.
+% Source scripts: figures/scripts/gen_*.py + this file.
+% Place this file under figures/paper/ and \input each block from main.tex.
+% =============================================================================
+
+% --- Fig 1: Hero (2-panel) --------------------------------------------------
+\begin{figure*}[t]
+    \centering
+    \begin{subfigure}[t]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/paper/fig_feasibility_by_baseline.pdf}
+        \caption{Per-baseline corridor feasibility.}
+        \label{fig:feas-bar}
+    \end{subfigure}\hfill
+    \begin{subfigure}[t]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/paper/fig_h3_b2_vs_b3.pdf}
+        \caption{Per-pair B3 $-$ B2 feasibility gain.}
+        \label{fig:h3-hist}
+    \end{subfigure}
+    \caption{\textbf{Headline result.} The runway-configuration-aware dynamic envelope (B3)
+        recovers \textbf{2.0$\times$ of LAX} and \textbf{4.5$\times$ of SFO} vertiport-pair feasibility
+        that the static Annex 14 both-sides-closed baseline (B2) pessimistically forbids,
+        on real ADS-B from 5 Aug-2024 Fridays at each airport.}
+    \label{fig:hero}
+\end{figure*}
+
+% --- Fig 2: System diagram (TikZ, full-width) -------------------------------
+\input{figures/paper/fig2_system_diagram.tex}
+
+% --- Fig 3: 3-D OLS rendering for LAX ---------------------------------------
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper/fig3_ols_3d_klax.pdf}
+    \caption{Annex 14 OLS for LAX (KLAX), as 98 prisms rendered at their
+        top-of-prism polygons. Approach, takeoff-climb, transitional,
+        inner-horizontal, conical, runway-strip, RESA, and OFZ surfaces are
+        coloured per family. ARP marked $\star$; runway centroids in red.}
+    \label{fig:ols-3d}
+\end{figure}
+
+% --- Fig 4: Dynamic envelope filmstrip --------------------------------------
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper/fig4_envelope_filmstrip_klax.pdf}
+    \caption{LAX dynamic envelope at $\sim$1500 ft AGL on 2024-08-02 at four UTC
+        hours. Yellow = open for eVTOL traffic, purple = closed by the
+        runway-configuration-aware envelope $\mathcal{E}_t$. The closure pattern
+        rotates with the active runway configuration inferred from real ADS-B.}
+    \label{fig:envelope-filmstrip}
+\end{figure*}
+
+% --- Fig 5: Risk-field AUROC -------------------------------------------------
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper/fig_xgb_metrics.pdf}
+    \caption{Risk-field AUROC on the temporally held-out test day (2024-08-30),
+        4-day train (08-02/09/16/23) per airport. LR, RF, and XGB cluster within
+        $\pm 0.05$ at both airports, indicating a feature ceiling rather than a
+        model-class ceiling.}
+    \label{fig:xgb}
+\end{figure}
+
+% --- Fig 6: Corridor length boxplot -----------------------------------------
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper/fig_length_per_baseline.pdf}
+    \caption{Corridor length (km) per baseline at LAX and SFO. Conditioned on
+        feasibility — only feasible corridors enter. B3 grows path length by
+        $\leq 20\%$ over B1 straight lines, in exchange for the
+        $\mathcal{E}_t$-respecting safety.}
+    \label{fig:length}
+\end{figure}
+
+% --- Fig 7: Vertiport-pair feasibility heatmaps -----------------------------
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.85\linewidth]{figures/paper/fig7_vertiport_heatmap.pdf}
+    \caption{Per-vertiport-pair feasibility (\%) under B2 (left) and B3 (right)
+        at LAX (top) and SFO (bottom). Rows / columns are the four candidate
+        vertiport classes (V1 off-fence, V2 landside, V3 rooftop, V4 city-end).
+        B3 lifts the V3-rooftop column substantially at both airports —
+        operational support for H3 (\S\ref{sec:discussion}).}
+    \label{fig:vertiport-heatmap}
+\end{figure*}
+
+% --- Table 1: Headline KPI table --------------------------------------------
+\input{figures/paper/table1_headline_kpi.tex}
+
+% --- Table 2: Per-day data manifest -----------------------------------------
+\input{figures/paper/table2_data_manifest.tex}
+
+% --- Table 3: Risk-field model comparison -----------------------------------
+\input{figures/paper/table3_model_comparison.tex}
+
+% --- Table 4: Annex 14 parameters -------------------------------------------
+\input{figures/paper/table4_annex14_params.tex}

@@ -1,0 +1,24 @@
+\begin{table}[t]
+\centering
+\caption{Annex 14 OLS parameters used by DREAM (generic Code 4 precision approach). These are public-secondary-source placeholder values, not a copy of the ICAO normative text. Per-airport calibration is supported via the YAML override in \texttt{configs/annex14/}.}
+\label{tab:ols-params}
+\begin{tabular}{lr}
+\toprule
+Parameter & Value \\
+\midrule
+Approach surface (inner edge / divergence) & 300 m / 0.150 rad \\
+Approach section 1 (slope $\times$ length) & 1:50 $\times$ 3000 m \\
+Approach section 2 (slope $\times$ length) & 1:40 $\times$ 3600 m \\
+Takeoff-climb (slope $\times$ length) & 1:50 $\times$ 15000 m \\
+Transitional slope & 1:7 \\
+Inner horizontal (radius / height) & 4000 m / 45 m \\
+Conical (slope / height) & 1:20 / 100 m \\
+Runway strip (half-width / end length) & 150 m / 60 m \\
+Runway end safety area (RESA) & 240 $\times$ 150 m \\
+OFZ inner-approach (slope $\times$ length) & 1:50 $\times$ 900 m \\
+OFZ inner-transitional slope & 1:3 \\
+Vertiport approach/departure (slope, FAA EB-105A) & 1:8 \\
+Vertiport OFV (FATO half-side / height) & 16 m / 300 m \\
+\bottomrule
+\end{tabular}
+\end{table}

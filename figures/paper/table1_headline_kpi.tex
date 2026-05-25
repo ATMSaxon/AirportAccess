@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Real-data DREAM headline. Per-baseline corridor counts ($n=180$), feasibility (\%, fraction of 12 vertiport pairs $\times$ 3 hours $\times$ 5 Aug-2024 Fridays that the planner returns a feasible corridor for), mean corridor length (km, over feasible only), and mean A* expansions.}
+\label{tab:headline}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & \multicolumn{4}{c}{LAX (KLAX)} & \multicolumn{4}{c}{SFO (KSFO)} \\
+\cmidrule(lr){2-5} \cmidrule(lr){6-9}
+Baseline & $n$ & feas.\% & len.\,km & pops & $n$ & feas.\% & len.\,km & pops \\
+\midrule
+B0 & 180 & 0.0 & — & 0 & 180 & 0.0 & — & 0 \\
+B1 & 180 & 100.0 & 12.2 & 0 & 180 & 100.0 & 10.9 & 0 \\
+B2 & 180 & 33.3 & 21.2 & 16032 & 180 & 16.7 & 24.7 & 10204 \\
+B3 & 180 & 65.0 & 13.1 & 9498 & 180 & 75.0 & 8.2 & 4775 \\
+\midrule
+\multicolumn{9}{l}{\footnotesize B3 vs B2 feasibility lift: \textbf{2.0$\times$} LAX, \textbf{4.5$\times$} SFO.} \\
+\bottomrule
+\end{tabular}
+\end{table}

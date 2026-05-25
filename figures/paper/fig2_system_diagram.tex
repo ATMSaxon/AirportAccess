@@ -1,0 +1,55 @@
+% Fig 2 — DREAM system diagram (TikZ skeleton).
+%
+% Manual draw element — refine line widths, fonts, and labels in final paper.
+% Designed as full-width (0.95\textwidth) horizontal flow with 6 boxes + arrows.
+%
+% Compile in the main paper with:  \input{figures/paper/fig2_system_diagram.tex}
+%
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+    node distance=14mm and 8mm,
+    box/.style={
+        rectangle, rounded corners, draw, fill=gray!8,
+        minimum width=23mm, minimum height=14mm,
+        font=\small, align=center,
+    },
+    src/.style={box, fill=blue!8, draw=blue!50!black},
+    out/.style={box, fill=green!8, draw=green!50!black},
+    arr/.style={-{Latex[length=2mm]}, semithick},
+]
+% Row of 6 lanes
+\node[src]                  (data)  {Data lane\\\footnotesize FAA · USGS · OSM\\\footnotesize adsb.lol · METAR};
+\node[box, right=of data]   (geom)  {Geometry\\\footnotesize OLS $\to$ 3-D SDF\\\footnotesize Vertiport OFV};
+\node[box, right=of geom]   (traf)  {Traffic\\\footnotesize Runway-config\\\footnotesize Dynamic envelope};
+\node[box, right=of traf]   (ml)    {ML\\\footnotesize Counterfactual\\\footnotesize XGB + conformal};
+\node[box, right=of ml]     (plan)  {Planning\\\footnotesize Envelope-aware A*\\\footnotesize 5-term cost};
+\node[out, right=of plan]   (eval)  {Analysis\\\footnotesize Safety / Capacity\\\footnotesize / Accessibility KPI};
+
+% Top-row inputs to geometry + traffic + ml
+\draw[arr] (data) -- (geom);
+\draw[arr] (data.east) to[bend right=12] (traf.west);
+\draw[arr] (data.east) to[bend right=22] (ml.west);
+
+\draw[arr] (geom) -- (traf);
+\draw[arr] (geom.east) to[bend right=12] (ml.west);
+\draw[arr] (geom.east) to[bend right=22] (plan.west);
+
+\draw[arr] (traf) -- (ml);
+\draw[arr] (traf.east) to[bend right=12] (plan.west);
+
+\draw[arr] (ml)   -- (plan);
+\draw[arr] (plan) -- (eval);
+
+% Footer label
+\node[font=\footnotesize, below=4mm of plan.south] (capnote)
+    {DREAM pipeline. All lanes ship a \texttt{sanity\_check} entry-point exercised by \texttt{scripts/run\_sanity.py}.};
+\end{tikzpicture}
+\caption{DREAM framework lanes. Real airport / ADS-B / weather data flow through
+    six lanes culminating in safety/capacity/accessibility KPIs. The geometry
+    lane encodes ICAO Annex~14 as a 3-D signed-distance field; the traffic lane
+    converts ADS-B into a runway-configuration-aware dynamic envelope; the ML
+    lane learns a risk field by counterfactual injection; planning runs an
+    envelope-constrained A* over a 5-term cost.}
+\label{fig:dream-pipeline}
+\end{figure*}

@@ -1,0 +1,20 @@
+\begin{table}[t]
+\centering
+\caption{Real-data risk-field models. 4 Aug-2024 Fridays $\rightarrow$ 1 Friday temporal holdout. $n_{\textrm{train}}=180\,000$, $n_{\textrm{test}}=40\,000$ counterfactual eVTOL segments. \emph{Conformal coverage} is the empirical hit rate of the split-conformal 90\,\% prediction interval; target window $0.88$--$0.92$ is shown in \textbf{bold} on rows that hit it. AUROC clusters within $\pm 0.05$ across LR/RF/XGB at both airports, indicating a feature ceiling — discussed in \S\ref{sec:discussion}.}
+\label{tab:risk}
+\begin{tabular}{llrrr rr}
+\toprule
+Airport & Model & AUROC & AUPR & Conformal cov. & pos$_{\textrm{tr}}$ & pos$_{\textrm{te}}$ \\
+\midrule
+KLAX & LR & 0.687 & 0.570 & 0.864 & 0.57 & 0.41 \\
+KLAX & RF & 0.659 & 0.527 & 0.940 & 0.57 & 0.41 \\
+KLAX & XGB & 0.680 & 0.564 & 0.780 & 0.57 & 0.41 \\
+KLAX & MLP & 0.639 & 0.527 & 1.000 & 0.57 & 0.41 \\
+\midrule
+KSFO & LR & 0.695 & 0.377 & 0.936 & 0.35 & 0.21 \\
+KSFO & RF & 0.682 & 0.314 & 0.962 & 0.35 & 0.21 \\
+KSFO & \textbf{XGB} & 0.716 & 0.402 & \textbf{0.912} & 0.35 & 0.21 \\
+KSFO & MLP & 0.500 & 0.212 & 1.000 & 0.35 & 0.21 \\
+\bottomrule
+\end{tabular}
+\end{table}
