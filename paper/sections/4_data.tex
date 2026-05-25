@@ -1,0 +1,73 @@
+\section{Data}
+\label{sec:data}
+
+DREAM is evaluated on eight real public data sources. We deliberately avoid
+any credentialed feed (FAA SWIM, OpenSky Trino) so that the entire pipeline
+is reproducible by any researcher with a standard Python installation. All
+sources are listed below; \cref{tab:data} reports the per-day ADS-B inventory.
+
+\paragraph{Airports.}
+We study two large US hub airports: Los Angeles International (LAX,
+ICAO~\texttt{KLAX}) as primary case study, and San Francisco International
+(SFO, ICAO~\texttt{KSFO}) as external validation. Both have parallel-runway
+configurations whose active direction shifts with the prevailing wind;
+this is exactly the situation in which $\Cdyn$ should differ markedly from
+$\mathcal{S}_{\mathrm{rwy}}$. Per-airport runway thresholds, ARP, and field
+elevation are taken from the FAA NASR-effective Airport Diagrams and
+encoded in YAML under \texttt{configs/airports/}.
+
+\paragraph{Annex 14 parameters.}
+The OLS dimensions used in \cref{eq:sdf,eq:Astatic} are the
+publicly-documented Code~4 precision-approach values, listed in full in
+\cref{tab:ols-params}. They drive \emph{both} airports identically; we make
+no per-airport adjustment to these parameters.
+
+\paragraph{Operational data: ADS-B from \texttt{adsb.lol}.}
+The \texttt{adsb.lol} project~\citep{adsblol_history} publishes a daily
+historical archive of \texttt{readsb}-decoded aircraft state vectors,
+released as gzipped JSON traces on GitHub. We download the five Friday
+releases for August 2024 -- 2024-08-02, 09, 16, 23, 30 -- and filter each
+to the 30~NM ARP-centred bounding box of the target airport. We project
+WGS-84 coordinates to ENU using the per-airport
+azimuthal-equidistant projection. \Cref{tab:data} reports the per-day,
+per-airport row counts (\textbf{$7.6$ million state vectors in total}),
+the number of distinct aircraft, and the resulting parquet size.
+
+% --- Table 2: per-day data inventory ------------------------------------
+\input{../figures/paper/table2_data_manifest.tex}
+
+\paragraph{Coverage caveat.}
+A noticeable feature of \cref{tab:data} is that the row count drops
+$\sim 50\,\%$ at both airports after 2024-08-09. The cause is not an artefact
+of our pipeline: \texttt{adsb.lol} is a volunteer-receiver network, and
+volunteer-feeder participation on 16/23/30 was lower than on 02/09. This is
+exactly the kind of operational coverage variation a deployed DREAM system
+would have to live with, and we report it openly. The robustness of our
+$B_3 \supsetneq B_2$ conclusion to this coverage variation is part of the
+empirical contribution of \cref{sec:lax,sec:sfo}.
+
+\paragraph{Other public sources.}
+The remaining six sources are:
+(i)~\textbf{FAA Digital Obstacle File}~\citep{faa_dof} for the obstacles
+within a 50~NM radius of each ARP;
+(ii)~\textbf{USGS 3D Elevation Program (3DEP)}~\citep{usgs_3dep} for the DEM
+underneath each airport's 60~km extract box;
+(iii)~\textbf{OpenStreetMap (Overpass)}~\citep{osm} for buildings, roads, and
+amenities within the 30~km ARP box;
+(iv)~\textbf{NOAA Aviation Weather Center} for METAR, retrieved from the
+Iowa State University ASOS archive~\citep{iastate_asos} because the live
+AWC API only serves the current week;
+(v)~\textbf{Los Angeles World Airports (LAWA)}~\citep{lawa2024} for
+2024 LAX peak-hour ground-trip counts (this is LAX-only; SFO is not a LAWA
+airport);
+(vi)~\textbf{BTS Airline Origin-and-Destination Survey (DB1B/DB1C)} for the
+passenger-itinerary weights used in the accessibility KPIs.
+
+\paragraph{Operational scope.}
+All experiments are evaluated on $5 \times 2 \times 12 \times 4 \times 3 =
+1\,440$ corridors: 5~Aug-2024 Fridays, 2~airports, 12~directed vertiport
+pairs (V1$\rightarrow$V2 through V4$\rightarrow$V3 over the four candidate
+vertiports of \cref{sec:method-sdf}), 4~baselines $B_0\ldots B_3$, and
+3~peak hours of the day. The 5~Fridays match the LAWA 2024 Traffic
+Generation Report's typical-design-day rule
+\citep{lawa2024}.

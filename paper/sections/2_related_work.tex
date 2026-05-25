@@ -1,0 +1,66 @@
+\section{Related work}
+\label{sec:related}
+
+\paragraph{eVTOL and UAM corridor planning.}
+The bulk of the eVTOL/UAM corridor literature models the airspace above and
+around an airport as a generic low-altitude airspace. Trajectory deconfliction
+is then handled either with mixed-integer programming on a coarse graph
+\citep{bulusu2021,tang2021}, with learning-based controllers
+\citep{kleinbekman2020}, or with capacity-aware scheduling at vertiports
+\citep{vascik2019,pang2022}. These approaches optimise for throughput and
+delay; they do not, however, distinguish the airspace volumes that are
+\emph{intrinsically} closed by Annex~14 geometry from the volumes that are
+\emph{operationally} closed by the active runway configuration. DREAM is
+complementary: rather than design a new planner, it provides the
+runway-configuration-aware safety envelope an existing planner needs in
+order to be safe \emph{and} feasible at a real airport.
+
+\paragraph{Airport obstacle protection (ICAO, FAA, EASA).}
+ICAO Annex~14 Volume~I \citep{icao_annex14} defines the obstacle limitation
+surfaces that an aerodrome must keep clear; the document is, however, a
+\emph{design standard}, not an operational rule. FAA Engineering Brief~105A
+\citep{faa_eb_105a} extends Annex~14 reasoning to vertiports, with the
+characteristic $8:1$ horizontal-to-vertical approach/departure slope and an
+explicit requirement that vertiport approach and departure paths remain
+\emph{independent} of active-runway paths where practicable. The EASA
+prototype technical specifications \citep{easa_vertiport_proto} introduce
+the obstacle-free volume (OFV) concept: a funnel-shaped volume above each
+final approach and take-off area (FATO) within which VTOL aircraft must be
+able to perform a continued or rejected take-off. None of these documents,
+however, specifies how the static obstacle protection should compose with
+the time-varying runway configuration at a busy hub airport. Our framework
+fills exactly that gap: $\Astatic$ encodes the static design surfaces
+and $\Edyn = \Astatic \setminus \Cdyn$ encodes their composition with the
+operational closure $\Cdyn$.
+
+\paragraph{ADS-B-based airport analytics and runway-configuration inference.}
+The OpenSky Network \citep{schafer2014opensky} and its sister projects have
+made historical ADS-B widely accessible to the research community; the
+\texttt{adsb.lol} historical archive used in this paper is an open,
+volunteer-driven analogue. A growing line of work uses such data for
+runway-configuration detection, taxi-time prediction, and stand-allocation
+inference \citep{olive2019traffic,riboulet2020runway}. Our 15-minute
+rolling-vote configuration inference with METAR cross-check is a deliberately
+plain implementation of these ideas; the contribution of DREAM is not the
+inference algorithm but the fact that the inferred configuration is then
+\emph{composed with Annex~14 geometry} to yield an operational safety
+envelope. Adopting a more sophisticated configuration estimator
+\citep{riboulet2020runway} is an immediate drop-in extension.
+
+\paragraph{Counterfactual injection and conformal calibration in ATM.}
+There is no large-scale commercial eVTOL service at any major US hub at the
+time of writing; consequently, there is no real eVTOL operational dataset
+against which to validate a corridor planner. The conventional response in
+the ATM literature is to simulate eVTOL traffic from a hand-written generative
+model and then evaluate conflict rates within that simulated world
+\citep{bulusu2021,kleinbekman2020}. We argue this conflates two error sources
+(simulator bias and planner error) that are better disentangled by
+\emph{counterfactual injection}: insert candidate eVTOL trajectories into the
+\emph{real} fixed-wing operational scene and label each by a deterministic
+geometric and kinematic test \citep{rtca_dolca,lefebvre2018}. To convert the
+resulting binary labels into a calibrated risk surface we use split-conformal
+prediction \citep{vovk_conformal,angelopoulos2021gentle}, which provides
+distribution-free coverage guarantees under exchangeability. The empirical
+finding we discuss in \cref{sec:lax,sec:sfo,sec:discussion} is that
+calibration is achievable on real ADS-B even when raw classifier
+discrimination is feature-limited.

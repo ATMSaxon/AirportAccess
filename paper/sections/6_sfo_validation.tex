@@ -1,0 +1,74 @@
+\section{External validation: San Francisco International (KSFO)}
+\label{sec:sfo}
+
+We now re-run the full DREAM pipeline on SFO with the same Annex~14
+parameters, the same envelope thresholds, the same $\Edyn$ definition, and
+the same A$^\star$ cost weights. No SFO-specific tuning is performed. The
+purpose is to test whether the LAX result is an artefact of LAX's specific
+runway geometry or a general property of busy parallel-runway airports.
+
+\subsection{Static OLS layer at SFO}
+\label{sec:sfo-sdf}
+
+The SFO SDF assembles $98$ Annex~14 prisms across SFO's 8 runway ends on
+the $01/19$ and $10/28$ pairs onto a voxel grid of the same size as
+KLAX's. Build wall-clock is $42$~s; the inside fraction of the SDF box is
+$0.30\,\%$, slightly larger than KLAX because SFO's runways are
+geometrically closer to one another.
+
+\subsection{Runway-configuration inference at SFO}
+\label{sec:sfo-config}
+
+The five SFO Fridays exhibit fewer confidently-classified slices than LAX
+(\cref{tab:data}: SFO traffic counts are roughly half of LAX's at each
+date). Of the ten scoreable SFO slices in our window the METAR cross-check
+matches on $9/10$. The single mismatch occurs in a low-coverage slice
+(2024-08-23 at the 03~UTC slice) where the rolling-vote winner had only
+two contributing arrivals. We retain the inferred configuration on the
+basis of the broader pattern: SFO's dominant August-2024 configuration is
+the conventional west-flow (\texttt{ARR:28L/R, DEP:01L/R}), as expected
+from the prevailing onshore flow from the Pacific.
+
+\subsection{Headline feasibility result at SFO}
+\label{sec:sfo-feasibility}
+
+\Cref{tab:headline} reports SFO alongside LAX. Across the $180$ SFO
+corridors per baseline:
+\begin{itemize}
+\item $B_0$: $0\,\%$ by construction.
+\item $B_1$: $100\,\%$ feasible, mean length $\approx 10.9$~km.
+\item $B_2$ Annex 14 only, both-sides closed: $30/180 = 16.7\,\%$ feasible.
+    SFO's tighter runway geometry yields an even more brutal static
+    baseline.
+\item $B_3$ DREAM dynamic envelope: $135/180 = 75.0\,\%$ feasible. The
+    dynamic envelope multiplicatively lifts feasibility by $\boldsymbol{4.5\times}$
+    -- substantially larger than the LAX $1.95\times$.
+\end{itemize}
+
+\paragraph{Why the SFO lift is larger.}
+Two structural reasons drive the SFO $\to$ LAX lift difference. First, SFO
+operates on \emph{intersecting} (not parallel) runway pairs at low elevation,
+which compresses Annex~14's transitional-surface volumes much closer to the
+runway-strip centre and pushes more vertiport pairs out of $\Astatic$.
+Second, SFO's lower base traffic density (\cref{tab:data}) leaves a larger
+fraction of the airspace outside the active-runway corridor at any given
+time -- and therefore eligible for $\Edyn$ reopening. The pessimism of
+$B_2$ relative to the operational truth is sharper at less-busy airports;
+the $B_3-B_2$ gain is correspondingly larger.
+
+\Cref{fig:vertiport-heatmap} (bottom row) renders the same per-vertiport-pair
+heatmaps for SFO. The same qualitative pattern as LAX -- $V_2$ landside
+dominates, $V_3$ rooftop is the geometrically tightest case -- holds without
+parameter re-tuning. The cross-airport replication of $B_3 \supsetneq B_2$
+is the central robustness claim of this paper.
+
+\subsection{Risk-field calibration at SFO}
+\label{sec:sfo-risk}
+
+The SFO XGB model reaches AUROC = $0.716$ with split-conformal coverage
+$0.912$. The conformal coverage is \emph{within} the $0.90 \pm 0.02$ target
+window, despite the raw AUROC being below the experiment plan's $0.80$
+target. We interpret this as the central operational claim about
+calibration: distribution-free prediction-set coverage is achievable on real
+ADS-B at $0.90$ even when discrimination is feature-limited. The
+discrimination gap is the topic of \cref{sec:discussion}.

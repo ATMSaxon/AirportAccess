@@ -16,3 +16,14 @@ figures/*.pdf
 models/
 *.pkl
 *.pt
+
+# LaTeX intermediates
+*.aux
+*.bbl
+*.blg
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+paper-backup-*/

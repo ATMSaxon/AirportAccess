@@ -1,0 +1,29 @@
+\begin{abstract}
+Electric vertical-take-off-and-landing (eVTOL) airport shuttles are widely
+modelled as a generic urban-air-mobility routing problem, but airport airspace
+is not flat low-altitude airspace: it is partitioned by ICAO Annex~14 obstacle
+limitation surfaces (OLS) whose protection varies with the active runway
+configuration. We present DREAM, a framework that operationalises Annex~14 OLS
+into a runway-configuration-aware dynamic safety envelope for eVTOL
+airport-shuttle planning. Annex~14 OLS are encoded as a 3-D signed-distance
+field on the airport's local east-north-up grid; runway configuration is
+inferred from real automatic-dependent-surveillance--broadcast (ADS-B)
+trajectories at 15-minute resolution, with METAR cross-check; a risk field is
+learned from counterfactually injected eVTOL segments labelled by deterministic
+geometric and kinematic tests against real fixed-wing tracks; corridors are
+planned by an envelope-constrained $A^\star$ over a five-term cost. We evaluate
+DREAM on 1\,440 corridors spanning five August-2024 Fridays at both Los
+Angeles International (LAX) and San Francisco International (SFO), using
+$7.6$~million ADS-B state vectors from the open \texttt{adsb.lol} historical
+archive. The runway-configuration-aware envelope recovers $2.0\times$ of
+vertiport-pair feasibility at LAX ($33 \% \to 65\,\%$) and $4.5\times$ at SFO
+($17 \% \to 75\,\%$) over a static Annex-14-only baseline that closes both
+parallel-runway corridors as a pessimistic safety measure, at less than a
+$20 \%$ path-length penalty on pairs that the static baseline finds. A
+gradient-boosted risk field reaches a split-conformal coverage of $0.91$ at SFO
+under temporal hold-out, even where raw discrimination is feature-limited.
+DREAM does not require real eVTOL operational data: candidate eVTOL segments
+are counterfactually injected into the real fixed-wing operational scene and
+labelled by deterministic safety tests, which we argue is the methodologically
+honest framing for the current state of the industry.
+\end{abstract}

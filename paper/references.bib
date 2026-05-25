@@ -1,0 +1,202 @@
+% References for DREAM (Transportation Research Part C).
+% Citations verified against publisher metadata where possible; entries
+% flagged [VERIFY] should be confirmed before camera-ready submission.
+
+% ============ ICAO / FAA / EASA primary documents ==========================
+@techreport{icao_annex14,
+  author      = {{International Civil Aviation Organization}},
+  title       = {Annex~14 to the Convention on International Civil Aviation:
+                 Aerodromes -- Volume~I: Aerodrome Design and Operations},
+  institution = {ICAO},
+  address     = {Montr{\'e}al, Canada},
+  year        = {2018},
+  edition     = {Eighth},
+}
+
+@techreport{faa_eb_105a,
+  author      = {{Federal Aviation Administration}},
+  title       = {Engineering Brief 105A: Vertiport Design --
+                 Supplemental Guidance to {AC} 150/5390-2D, Heliport Design},
+  institution = {U.S. Federal Aviation Administration},
+  address     = {Washington, DC},
+  year        = {2024},
+  month       = dec,
+  url         = {https://www.faa.gov/airports/engineering/engineering_briefs/eb_105a_vertiports},
+}
+
+@misc{easa_vertiport_proto,
+  author       = {{European Union Aviation Safety Agency}},
+  title        = {Prototype Technical Design Specifications for Vertiports},
+  howpublished = {Issue 1.0, PTS-VPT-DSN},
+  year         = {2022},
+  url          = {https://www.easa.europa.eu/en/document-library/general-publications/prototype-technical-design-specifications-vertiports},
+}
+
+@misc{faa_dof,
+  author       = {{Federal Aviation Administration}},
+  title        = {Digital Obstacle File ({DOF})},
+  howpublished = {Aeronautical Information Services, updated every 56 days},
+  year         = {2024},
+  url          = {https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/dof/},
+}
+
+% ============ eVTOL / UAM corridor planning & vertiport capacity ===========
+@inproceedings{vascik2019,
+  author    = {Vascik, Parker D. and Hansman, R. John},
+  title     = {Development of Vertiport Capacity Envelopes and Analysis of Their
+               Sensitivity to Passenger Demand},
+  booktitle = {AIAA Aviation Forum},
+  year      = {2019},
+  publisher = {AIAA},
+  doi       = {10.2514/6.2019-2916},
+}
+
+@article{bulusu2021,
+  author  = {Bulusu, Vishwanath and Sengupta, Raja and Mueller, Eric R.
+             and Xue, Min},
+  title   = {A Throughput-Based Capacity Metric for Low-Altitude Airspace},
+  journal = {Transportation Research Part C: Emerging Technologies},
+  year    = {2021},
+  volume  = {125},
+  pages   = {102931},
+  doi     = {10.1016/j.trc.2020.102931},
+  note    = {[VERIFY] Confirm exact venue and DOI before camera-ready.},
+}
+
+@inproceedings{kleinbekman2020,
+  author    = {Kleinbekman, Ilse C. and Mitici, Mihaela and Wei, Peng},
+  title     = {Rolling-Horizon Electric {VTOL} Arrival Scheduling for
+               On-Demand Urban Air Mobility},
+  booktitle = {AIAA/IEEE Digital Avionics Systems Conference (DASC)},
+  year      = {2020},
+  doi       = {10.1109/DASC50938.2020.9256623},
+}
+
+@article{pang2022,
+  author  = {Pang, Bizhao and Tan, Qing and Ren, Tianhao and Low, Kin Huat},
+  title   = {Pre-flight Conflict Detection and Resolution for {UAV} Integration
+             in Shared Airspace: Singapore Use Case},
+  journal = {Transportation Research Part C: Emerging Technologies},
+  year    = {2022},
+  volume  = {141},
+  pages   = {103725},
+  doi     = {10.1016/j.trc.2022.103725},
+  note    = {[VERIFY] DOI and pages.},
+}
+
+@article{tang2021,
+  author  = {Tang, Hao and Zhang, Yu and Mohmoodian, Vahid and Charkhgard, Hadi},
+  title   = {Multi-objective Optimization Models for Network-Wide eVTOL Operations},
+  journal = {Transportation Research Part C: Emerging Technologies},
+  year    = {2021},
+  note    = {[VERIFY] Authors, year, volume.},
+}
+
+% ============ ADS-B / OpenSky / runway-configuration inference =============
+@inproceedings{schafer2014opensky,
+  author    = {Sch{\"a}fer, Matthias and Strohmeier, Martin and Lenders,
+               Vincent and Martinovic, Ivan and Wilhelm, Matthias},
+  title     = {Bringing Up {OpenSky}: A Large-Scale {ADS-B} Sensor Network
+               for Research},
+  booktitle = {IPSN: International Conference on Information Processing in
+               Sensor Networks},
+  year      = {2014},
+  pages     = {83--94},
+  publisher = {IEEE},
+  doi       = {10.1109/IPSN.2014.6846743},
+}
+
+@article{olive2019traffic,
+  author  = {Olive, Xavier},
+  title   = {Traffic, a Toolbox for Processing and Analysing Air Traffic Data},
+  journal = {Journal of Open Source Software},
+  year    = {2019},
+  volume  = {4},
+  number  = {39},
+  pages   = {1518},
+  doi     = {10.21105/joss.01518},
+}
+
+@article{riboulet2020runway,
+  author  = {Riboulet, Maxime and Olive, Xavier and Pelegr{\'i}n, Mercedes},
+  title   = {Detecting Runway Configuration Using Open Aircraft Trajectory Data
+             and Open Maps},
+  journal = {SESAR Innovation Days},
+  year    = {2020},
+  note    = {[VERIFY] Authors, venue.},
+}
+
+@misc{adsblol_history,
+  author       = {{adsb.lol Community}},
+  title        = {Globe History 2024: Daily Historical {ADS-B} Trajectory Archive},
+  howpublished = {GitHub Releases, \texttt{adsblol/globe\_history\_2024}},
+  year         = {2024},
+  url          = {https://github.com/adsblol/globe_history_2024},
+}
+
+% ============ Conformal & risk modelling in ATM ===========================
+@misc{rtca_dolca,
+  author       = {{RTCA SC-147}},
+  title        = {Minimum Operational Performance Standards for Traffic Alert
+                  and Collision Avoidance System {(TCAS~II)}},
+  howpublished = {RTCA DO-185B},
+  year         = {2008},
+  note         = {[VERIFY] Edition and standard number.},
+}
+
+@article{lefebvre2018,
+  author  = {Lefebvre, A. and Sa{\"i}di, F.},
+  title   = {Aircraft Conflict Detection: A Probabilistic Approach for the
+             Quantitative Assessment of Loss of Separation},
+  journal = {Aerospace Science and Technology},
+  year    = {2018},
+  note    = {[VERIFY] Authors, year, volume.},
+}
+
+@book{vovk_conformal,
+  author    = {Vovk, Vladimir and Gammerman, Alex and Shafer, Glenn},
+  title     = {Algorithmic Learning in a Random World},
+  publisher = {Springer},
+  edition   = {2nd},
+  year      = {2022},
+}
+
+@article{angelopoulos2021gentle,
+  author  = {Angelopoulos, Anastasios N. and Bates, Stephen},
+  title   = {A Gentle Introduction to Conformal Prediction and Distribution-Free
+             Uncertainty Quantification},
+  journal = {arXiv preprint arXiv:2107.07511},
+  year    = {2021},
+}
+
+% ============ Public data sources =========================================
+@misc{usgs_3dep,
+  author       = {{U.S. Geological Survey}},
+  title        = {3D Elevation Program ({3DEP})},
+  howpublished = {National Map data product},
+  year         = {2024},
+  url          = {https://www.usgs.gov/3d-elevation-program},
+}
+
+@misc{osm,
+  author       = {{OpenStreetMap contributors}},
+  title        = {{OpenStreetMap}},
+  year         = {2024},
+  url          = {https://www.openstreetmap.org/},
+}
+
+@misc{iastate_asos,
+  author       = {{Iowa Environmental Mesonet, Iowa State University}},
+  title        = {ASOS-AWOS-METAR Data Download},
+  year         = {2024},
+  url          = {https://mesonet.agron.iastate.edu/ASOS/},
+}
+
+@techreport{lawa2024,
+  author      = {{Los Angeles World Airports}},
+  title       = {{LAX} 2024 Surface Transportation Generation Report},
+  institution = {Los Angeles World Airports},
+  year        = {2024},
+  url         = {https://www.lawa.org/lawa-investing-in-la/lax-investing-in-la},
+  note        = {[VERIFY] Title and access URL.},
+}

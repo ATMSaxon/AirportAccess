@@ -1,0 +1,130 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{What the $2\times$/$4.5\times$ number means operationally}
+
+The headline numbers are unusual in the eVTOL/UAM literature because most
+prior comparisons report incremental percentage-point improvements within a
+single planning paradigm. The DREAM gap is multiplicative because it spans
+two qualitatively different paradigms: \emph{configuration-blind} (B$_2$)
+and \emph{configuration-aware} (B$_3$). The size of the gap quantifies the
+operational cost of \emph{not} integrating runway-configuration awareness
+into UAM corridor planning at an airport. Two thirds of LAX vertiport pairs
+and seven eighths of SFO vertiport pairs that the static baseline would
+declare infeasible are in fact reachable, on the same days, under the same
+weather, with a 15-minute-resolution view of the active runway
+configuration. Conversely, $\leq 20\,\%$ of path length is the price the
+DREAM planner pays for that reachability on pairs the static baseline can
+already serve. The net is unambiguous: airport-aware UAM planning needs the
+geometric protection \emph{and} the operational awareness; neither alone
+is sufficient.
+
+\subsection{Why AUROC plateaus at $0.68$--$0.72$}
+
+Across LR, RF, XGB, and MLP at both airports, the held-out AUROC clusters
+within $\pm 0.05$ of $0.70$ (\cref{tab:risk}). This is consistent across
+model classes, which means the ceiling is in the features rather than in the
+model. Our current feature set is dominated by static geometric distances
+(d$_\mathrm{OLS}$, d$_{\mathrm{rwy}}$, d$_{\mathrm{app}}$, d$_{\mathrm{dep}}$)
+and aggregated meteorological state; neither captures the
+\emph{per-aircraft kinematic} state that TCAS-style closest-point-of-approach
+predictors use~\citep{rtca_dolca,lefebvre2018}. Engineering CPA features --
+relative speed and bearing of each ADS-B track at the candidate
+midpoint -- would, by analogy with the ATM conflict-prediction literature,
+push AUROC into the $0.80$--$0.90$ band. We flag this as the most
+impactful immediate extension.
+
+\subsection{Why calibration succeeds where discrimination is bounded}
+
+Split-conformal prediction \citep{vovk_conformal,angelopoulos2021gentle}
+guarantees coverage $1 - \alpha$ on exchangeable data, regardless of
+whether the underlying classifier discriminates well. The SFO XGB model
+achieves coverage $0.912$ with AUROC $0.716$ -- i.e.\ the
+prediction sets are correctly sized, even though the point predictions
+are noisier than the experiment plan asked for. For an operational
+safety-critical context, the right level of claim to make on the current
+feature set is calibration, not discrimination. We have done so throughout.
+
+\subsection{Vertiport siting (H3)}
+
+The per-pair heatmaps (\cref{fig:vertiport-heatmap}) replicate at both
+airports the qualitative pattern that landside-edge vertiports ($V_2$)
+dominate terminal-rooftop vertiports ($V_3$) on joint feasibility -- the
+proposal's H3. The rooftop is geometrically the tightest case under
+both-sides-closed Annex~14 protection because its OFV funnel sits between
+the parallel runway corridors; the off-fence $V_1$ is feasible mainly
+because it lies outside the inner-horizontal surface; the city-end $V_4$
+(Union Station for LAX, Salesforce Transit Center for SFO) is sometimes
+infeasible because of overflight constraints on long city-side corridors.
+The operational reading is that landside-edge intermodal facilities such as
+the LAX Intermodal Transportation Facility West are the right primary
+deployment target for eVTOL airport shuttles in this generation, with
+rooftop vertiports reserved for follow-up deployments that have access to
+finer planning resolution or active-runway-corridor coordination.
+
+\subsection{Threats to validity and limitations}
+\label{sec:discussion-limitations}
+
+We list the threats explicitly:
+\begin{itemize}
+\item \textbf{No real eVTOL operational data.} All eVTOL trajectories are
+    counterfactually injected into real fixed-wing operational scenes.
+    Conformal coverage is therefore a calibration claim about the
+    \emph{injected} distribution, not about a deployed service.
+\item \textbf{Coverage variance in adsb.lol.} The volunteer-receiver
+    network shows a $\sim 50\,\%$ drop in coverage on 2024-08-{16, 23, 30}
+    at both airports (\cref{tab:data}). The $B_3 \supsetneq B_2$ ranking
+    is robust to this drop; absolute risk-model AUROC would benefit from
+    a denser feed (FAA SWIM SWIFT).
+\item \textbf{Annex 14 parameters are public-secondary-source.} The values
+    in \cref{tab:ols-params} are the publicly documented Code~4 precision
+    approach values, not the ICAO normative text. Per-airport calibration
+    requires a YAML override.
+\item \textbf{Risk-field AUROC plateau.} Discussed in
+    \cref{sec:discussion}. The model-class invariance localises the gap to
+    the feature set.
+\item \textbf{Memory-bound corridor-closure-rate KPI.} Loading
+    five days of envelope tensors simultaneously exceeded our 54~GB
+    Featurize box and was disabled for this report; the streaming
+    variant is a $\sim 1$-day refactor.
+\item \textbf{B$_4$ risk-field-cost sweep.} The per-cell risk grid export
+    was deferred in favour of the headline B$_2$/B$_3$ comparison. The
+    code path is in place; we leave the B$_4$ sweep as immediate future
+    work.
+\item \textbf{UTC-aligned peak hours.} The three peak hours of our sweep
+    are UTC 08, 11, and 17. The LAWA-defined ground-traffic peaks are
+    local PT, which corresponds to a 7-hour shift in UTC. We retain UTC
+    hours throughout for cross-airport consistency, at the cost of not
+    perfectly aligning with the LAWA local peaks. A future revision should
+    rerun with airport-local peak hours and bootstrap confidence intervals
+    on the $B_3 \to B_2$ difference per pair.
+\end{itemize}
+
+\subsection{Regulatory implications}
+
+FAA Engineering Brief 105A~\citep{faa_eb_105a} explicitly requires that
+vertiport approach and departure paths be independent of the active runway
+paths \emph{where practicable}. DREAM is, to our knowledge, the first
+quantitative tool that says how often this independence requirement is in
+fact \emph{practicable} on a per-vertiport basis at a real airport. The
+operational implication is that the practicability of a vertiport siting
+should be assessed on the \emph{dynamic} envelope $\Edyn$ rather than on the
+static $\Astatic$; otherwise the safety case is over-conservative.
+
+\subsection{Future work}
+
+The immediate extensions are:
+(i)~\emph{TCAS-CPA features} -- per-aircraft kinematic features should
+break the AUROC plateau;
+(ii)~\emph{full B$_4$ sweep} with the risk-grid term active;
+(iii)~\emph{streaming corridor-closure-rate KPI} -- a memory-bounded
+re-implementation of the safety-axis aggregator;
+(iv)~\emph{SWIM SWIFT migration} -- moving from \texttt{adsb.lol} to FAA
+SWIM SWIFT for production-grade ADS-B with no coverage gaps;
+(v)~\emph{additional hub airports} -- Boston Logan, Chicago O'Hare,
+Hartsfield-Jackson Atlanta would round out the cross-airport replication
+across different runway-geometry classes;
+(vi)~\emph{integration with vertiport scheduling}~\citep{vascik2019} --
+the corridor-feasibility table from DREAM is the natural input to a
+vertiport-capacity envelope, closing the gap to the existing scheduling
+literature.

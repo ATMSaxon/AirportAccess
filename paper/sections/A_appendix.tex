@@ -1,0 +1,72 @@
+\section{Per-airport runway thresholds and ARP coordinates}
+\label{sec:appendix-airports}
+
+The per-airport runway thresholds and ARP elevations used by the SDF
+builder of \cref{sec:method-sdf} are taken verbatim from the
+public-domain FAA NASR Airport Diagrams effective in August 2024.
+Reproducing the eight-row table per airport here would duplicate the
+project's \texttt{configs/airports/\{KLAX,KSFO\}.yaml} files; we point
+the reader to those YAML files instead.
+
+% Per-airport runway tables omitted from this preprint draft. They are
+% available verbatim in the project repository at
+% configs/airports/{KLAX,KSFO}.yaml and consist of 8 rows per airport
+% (threshold lat/lon, end lat/lon, length, width, true bearing,
+% code letter/number, precision flag).
+
+\section{Annex~14 OLS parameter table}
+\label{sec:appendix-ols}
+
+The complete OLS parameter set used in \cref{sec:method-sdf} appears in the
+body as \cref{tab:ols-params}. Per-airport overrides are supported in
+\texttt{configs/annex14/} but are unused in this paper -- both LAX and SFO
+are evaluated with the identical Code~4 precision approach parameter set.
+
+\section{Counterfactual sampling details}
+\label{sec:appendix-cf}
+
+For each (date, 15-min slice) pair we draw $n$ candidate eVTOL segments
+uniformly from the per-vertiport OFV $\Vofv$ of the source vertiport
+$v_{\mathrm{src}}$ to a uniform random destination inside the SDF box
+intersected with $\Astatic$. The segment kinematic profile is a piecewise
+linear trajectory: climb at $7$~m/s to cruise altitude (a uniform random
+choice in $[300, 1000]$~m AGL), level cruise at $67$~m/s (cruise speed
+from \texttt{configs/scenarios/cost\_weights.yaml}), descent at $5$~m/s to
+the destination OFV. The segment is discretised at $1$~s and matched
+against every contemporaneous ADS-B state vector within
+$\pm 60$~s for the five conflict criteria listed in
+\cref{sec:method-risk}.
+
+For LAX and SFO we generate $50\,000$~/~$40\,000$~/~$40\,000$~/~$40\,000$~/~
+$40\,000$ segments per Friday respectively, for a total of $210\,000$ LAX
+and $210\,000$ SFO segments. We hold out 2024-08-30 as the temporal test
+fold.
+
+\section{Computational footprint}
+\label{sec:appendix-compute}
+
+The entire pipeline was executed on a single Featurize RTX~4090 49\,GB
+instance (Featurize, Hangzhou). One-time stage costs:
+
+\begin{description}
+    \item[OLS SDF build (one airport)] $\sim 45$~s on a single CPU thread.
+    \item[ADS-B clean + classify (one airport-day)] $\sim 90$~s on a
+        single CPU thread.
+    \item[Dynamic-envelope build (one airport-day)] $\sim 8$~s.
+    \item[Counterfactual sampling (50k segs)] $\sim 4$~min on a single
+        CPU thread; embarrassingly parallel across days.
+    \item[Feature extraction (220k segs across 5 days)] $\sim 40$~min
+        on a single CPU thread, dominated by an $O(N_{\mathrm{seg}}
+        \times N_{\mathrm{ADS\text{-}B}})$ density-box scan; a
+        vectorised replacement is straightforward and is part of the
+        future work in \cref{sec:discussion}.
+    \item[Risk-field training (XGB on cached features)] $\sim 7$~s once
+        features are cached.
+    \item[Corridor planning (180 corridors per airport-baseline at
+        $300\times90$~m planning resolution)] $\sim 8$~min on 5 parallel
+        CPU threads.
+\end{description}
+
+The dominant single operation is feature extraction at $40$~min per
+airport. Total wall-clock time from raw ADS-B to final figures is under
+$3$~hours per airport.

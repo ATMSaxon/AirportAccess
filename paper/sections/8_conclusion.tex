@@ -1,0 +1,34 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented \textbf{DREAM}, a framework that operationalises ICAO
+Annex~14 obstacle limitation surfaces into a runway-configuration-aware
+dynamic safety envelope for eVTOL airport-shuttle corridor planning. The
+geometric layer encodes Annex~14 as a 3-D signed-distance field
+($98$ prisms per airport at $100$~m/$30$~m resolution); the operational
+layer infers the active runway configuration from real ADS-B at $15$-min
+resolution with a $96.6\,\%$ METAR cross-check; the planning layer plans
+corridors with an envelope-constrained $A^\star$ under a five-term cost.
+
+On real August-2024 operational data at LAX and SFO -- $1\,440$ corridors,
+$\sim7.6$ million ADS-B state vectors from the open
+\texttt{adsb.lol} historical archive -- the runway-configuration-aware
+envelope recovers $\boldsymbol{2.0\times}$ of LAX and
+$\boldsymbol{4.5\times}$ of SFO vertiport-pair feasibility that a static
+both-sides-closed Annex-14-only baseline forbids, at less than a $20\,\%$
+path-length penalty on pairs the static baseline finds. A
+counterfactually-trained risk field reaches conformal coverage $0.91$ at
+SFO under temporal hold-out, achieving operational calibration even where
+discrimination is feature-limited.
+
+We argued that counterfactual injection into the real fixed-wing
+operational scene -- with deterministic geometric/kinematic labels rather
+than surrogate-model labels -- is the methodologically honest framing for
+empirical eVTOL airport-shuttle analysis at the current industry stage.
+Cross-airport replication on SFO without per-airport re-tuning provides
+the central robustness claim.
+
+The operational implication is that airport-aware UAM planning needs the
+geometric protection \emph{and} the operational awareness; neither alone is
+sufficient. The DREAM gap quantifies, for the first time on real data, how
+expensive it is to use only the former.
