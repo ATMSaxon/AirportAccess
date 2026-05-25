@@ -64,12 +64,18 @@ def is_feasible_edge(
     edge_dt_s: float,
     max_climb_rate_mps: float,
     max_descent_rate_mps: float,
+    static_closure: np.ndarray | None = None,
+    use_static_closure: bool = False,
 ) -> bool:
     """Hard-reject infeasible edges.
 
     * `target_ijk` must be in bounds.
     * If `use_a_static`, `sdf[target] > 0`.
     * If `use_envelope`, `envelope[target] is True`.
+    * If `use_static_closure` AND `static_closure` is provided, `static_closure[target]`
+      must be False (i.e. the voxel is NOT inside the pessimistic both-sides-closed
+      runway corridor used by baseline B2). Missing `static_closure` is treated as
+      "no closure" so the synthetic problem (no runways) still works.
     * Climb-rate / descent-rate caps respected.
     """
     if not in_bounds(target_ijk, shape):
@@ -80,6 +86,9 @@ def is_feasible_edge(
             return False
     if use_envelope:
         if envelope is None or not envelope[i, j, k]:
+            return False
+    if use_static_closure and static_closure is not None:
+        if static_closure[i, j, k]:
             return False
     if edge_dt_s > 0:
         rate = dz_m / edge_dt_s

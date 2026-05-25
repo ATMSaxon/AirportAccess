@@ -29,6 +29,7 @@ import pandas as pd
 
 from src.utils import paths
 from src.utils.config import load_airport
+from src.utils.crs import AirportFrame
 from src.utils.grid import VoxelGrid
 from src.utils.logs import get_logger
 
@@ -218,6 +219,121 @@ def ofv_mask_on_grid(
         i1 - i0, j1 - j0, k1 - k0, int(inside.sum()), int(inside.size),
     )
     return inside
+
+
+# ---------------------------------------------------------------------------
+# Static runway closure mask (both parallel sides closed, baseline B2)
+# ---------------------------------------------------------------------------
+
+# Conversion constants for the closure-corridor geometry.
+_NM_TO_M = 1852.0
+_FT_TO_M = 0.3048
+
+
+def build_runway_closure_mask(
+    grid: VoxelGrid,
+    frame: AirportFrame,
+    airport_cfg: dict,
+    *,
+    along_track_extension_m: float = 3.0 * _NM_TO_M,   # 3 NM = 5556 m
+    half_width_m: float = (1500.0 * _FT_TO_M) / 2.0,    # 1500 ft / 2 ≈ 228.6 m
+    z_cap_agl_m: float = 5000.0 * _FT_TO_M,             # 5000 ft AGL = 1524 m
+) -> np.ndarray:
+    """Both-sides-closed pessimistic static safety mask for baseline B2.
+
+    For each runway in ``airport_cfg["runways"]``, build a rectangular corridor in ENU XY:
+
+    * along the runway centreline, extended ``along_track_extension_m`` beyond each
+      threshold (default 3 NM each side).
+    * perpendicular ``±half_width_m`` (default 1500 ft full width → 228.6 m half-width).
+    * vertically capped at ``z_cap_agl_m`` AGL above the field elevation (default 5000 ft).
+
+    Union across all runways; a voxel is True in the returned mask iff at least one
+    runway's closure corridor covers it. B2's walkable mask is then
+    ``(sdf > buffer) & (~closure_mask)`` — i.e. B2 keeps **all** parallel-runway corridors
+    closed regardless of which side wind happens to be using on the date in question.
+    B3's time-varying envelope opens whichever side the runway-configuration solver thinks
+    is downwind/inactive for the 15-minute slice.
+
+    Returns a bool ndarray of shape ``grid.shape``; True where closed (forbidden).
+    """
+    runways = airport_cfg.get("runways", []) or []
+    arp = airport_cfg.get("arp", {}) or {}
+    field_elev_m = float(arp.get("elev_m", 0.0))
+    z_top = field_elev_m + float(z_cap_agl_m)
+
+    nx, ny, nz = grid.shape
+    xs = grid.x_min + (np.arange(nx) + 0.5) * grid.dx  # (nx,)
+    ys = grid.y_min + (np.arange(ny) + 0.5) * grid.dy  # (ny,)
+    X, Y = np.meshgrid(xs, ys, indexing="ij")  # (nx, ny)
+    xy_closed = np.zeros((nx, ny), dtype=bool)
+
+    n_runways_used = 0
+    for rw in runways:
+        try:
+            thr_lat = float(rw["thr_lat"])
+            thr_lon = float(rw["thr_lon"])
+            end_lat = float(rw["end_lat"])
+            end_lon = float(rw["end_lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        ax_arr, ay_arr = frame.wgs_to_enu(np.array([thr_lon]), np.array([thr_lat]))
+        bx_arr, by_arr = frame.wgs_to_enu(np.array([end_lon]), np.array([end_lat]))
+        ax, ay = float(ax_arr[0]), float(ay_arr[0])
+        bx, by = float(bx_arr[0]), float(by_arr[0])
+        dx_c = bx - ax
+        dy_c = by - ay
+        L = float(np.hypot(dx_c, dy_c))
+        if L < 1e-3:
+            continue
+        ux = dx_c / L
+        uy = dy_c / L
+        a2x = ax - ux * along_track_extension_m
+        a2y = ay - uy * along_track_extension_m
+        L_ext = L + 2.0 * along_track_extension_m
+
+        px = X - a2x
+        py = Y - a2y
+        s_param = px * ux + py * uy
+        perp = px * uy - py * ux  # signed perpendicular distance (ENU plane)
+        in_along = (s_param >= 0.0) & (s_param <= L_ext)
+        in_perp = np.abs(perp) <= half_width_m
+        xy_closed |= (in_along & in_perp)
+        n_runways_used += 1
+
+    zs = grid.z_min + (np.arange(nz) + 0.5) * grid.dz
+    z_under_cap = zs <= z_top
+
+    mask = xy_closed[:, :, np.newaxis] & z_under_cap[np.newaxis, np.newaxis, :]
+    LOG.info(
+        "runway_closure_mask: %d runways, xy_closed_frac=%.4f, z_cap=%.1f m MSL (= %.0f ft AGL), "
+        "closed_voxels=%d/%d (%.3f%%)",
+        n_runways_used, xy_closed.mean(), z_top, z_cap_agl_m / _FT_TO_M,
+        int(mask.sum()), int(mask.size), 100.0 * mask.mean(),
+    )
+    return mask
+
+
+# Module-level cache so a batch sweep doesn't rebuild the mask for every corridor.
+_RUNWAY_CLOSURE_CACHE: dict[tuple, np.ndarray] = {}
+
+
+def runway_closure_mask(icao: str, grid: VoxelGrid) -> np.ndarray:
+    """Cached lookup for ``build_runway_closure_mask`` keyed on (icao, grid geometry)."""
+    key = (
+        icao,
+        float(grid.x_min), float(grid.x_max), float(grid.dx),
+        float(grid.y_min), float(grid.y_max), float(grid.dy),
+        float(grid.z_min), float(grid.z_max), float(grid.dz),
+    )
+    cached = _RUNWAY_CLOSURE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    cfg = load_airport(icao)
+    frame = AirportFrame.from_cfg(cfg)
+    mask = build_runway_closure_mask(grid, frame, cfg)
+    _RUNWAY_CLOSURE_CACHE[key] = mask
+    return mask
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +605,7 @@ def coarsen(
     risk: np.ndarray | None = None,
     density: np.ndarray | None = None,
     ofv: np.ndarray | None = None,
+    static_closure: np.ndarray | None = None,
 ) -> Tuple[VoxelGrid, dict[str, np.ndarray | None]]:
     """Block-reduce fine-resolution arrays to a coarser planning grid.
 
@@ -497,13 +614,15 @@ def coarsen(
     Envelope coarsened by AND (a coarse cell is clear only if all sub-voxels are clear).
     Risk / density coarsened by mean.
     OFV coarsened by max (a coarse cell is "in OFV" if any sub-voxel is in OFV).
+    Static closure (B2) coarsened by max (pessimistic: any closed sub-voxel ⇒ closed).
     """
     fx = max(int(round(planning_xy_m / fine_grid.dx)), 1)
     fy = max(int(round(planning_xy_m / fine_grid.dy)), 1)
     fz = max(int(round(planning_z_m / fine_grid.dz)), 1)
     if (fx, fy, fz) == (1, 1, 1):
         return fine_grid, {"sdf": sdf, "envelope": envelope, "risk": risk,
-                            "density": density, "ofv": ofv}
+                            "density": density, "ofv": ofv,
+                            "static_closure": static_closure}
 
     new_nx = fine_grid.shape[0] // fx
     new_ny = fine_grid.shape[1] // fy
@@ -523,4 +642,7 @@ def coarsen(
     out["risk"] = _block_reduce(risk, (fx, fy, fz), "mean") if risk is not None else None
     out["density"] = _block_reduce(density, (fx, fy, fz), "mean") if density is not None else None
     out["ofv"] = _block_reduce(ofv, (fx, fy, fz), "max") if ofv is not None else None
+    out["static_closure"] = (
+        _block_reduce(static_closure, (fx, fy, fz), "max") if static_closure is not None else None
+    )
     return coarse_grid, out

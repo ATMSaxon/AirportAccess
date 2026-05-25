@@ -11,3 +11,8 @@ figures/*.png
 figures/*.pdf
 *.zip
 *.tgz
+
+# Model artefacts — too large for GitHub
+models/
+*.pkl
+*.pt

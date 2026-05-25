@@ -203,15 +203,23 @@ def _derive_geometric_altitude(df: pd.DataFrame,
     qnh_series = None
     n_offline_qnh = 0
     if metar is not None and not metar.empty and "altim_hpa" in metar.columns:
-        m = metar.dropna(subset=["altim_hpa"]).copy()
+        m = metar.dropna(subset=["altim_hpa", "time_utc"]).copy()
         if not m.empty:
             if not pd.api.types.is_datetime64_any_dtype(m["time_utc"]):
                 m["time_utc"] = pd.to_datetime(m["time_utc"], utc=True)
             elif m["time_utc"].dt.tz is None:
                 m["time_utc"] = m["time_utc"].dt.tz_localize("UTC")
+            # pandas.merge_asof requires identical datetime resolution on both sides
+            # (e.g. ADS-B from adsb.lol parquet ships datetime64[us, UTC] while
+            # METAR comes back as datetime64[ns, UTC]). Cast both to ns for safety.
+            m["time_utc"] = m["time_utc"].astype("datetime64[ns, UTC]")
             m = m.sort_values("time_utc")
+            df_t = df[["time_utc"]].copy()
+            if df_t["time_utc"].dt.tz is None:
+                df_t["time_utc"] = df_t["time_utc"].dt.tz_localize("UTC")
+            df_t["time_utc"] = df_t["time_utc"].astype("datetime64[ns, UTC]")
             qnh_series = pd.merge_asof(
-                df[["time_utc"]].sort_values("time_utc").reset_index(),
+                df_t.sort_values("time_utc").reset_index(),
                 m[["time_utc", "altim_hpa"]],
                 on="time_utc", direction="nearest",
                 tolerance=pd.Timedelta("90min"),

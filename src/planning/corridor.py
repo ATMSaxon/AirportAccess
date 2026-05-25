@@ -42,6 +42,7 @@ from .loaders import (
     load_risk_slice,
     load_sdf,
     ofv_mask_on_grid,
+    runway_closure_mask,
 )
 from .smoothing import smooth_path
 
@@ -160,6 +161,11 @@ def _planner_inputs_from_disk(
         if d is not None and d.shape == grid.shape:
             density = d
 
+    # 5b. Static both-sides-closed runway corridor mask (B2 only).
+    #     Loaded for every baseline so the cache stays warm during a sweep, but only
+    #     B2's `_baseline_gate` actually enforces it via `use_static_closure=True`.
+    static_closure = runway_closure_mask(icao, grid)
+
     # 6. Optional planning-grid coarsening.
     if planning_xy_m is not None or planning_z_m is not None:
         from .loaders import coarsen
@@ -175,6 +181,7 @@ def _planner_inputs_from_disk(
             risk=risk,
             density=density,
             ofv=src_ofv,
+            static_closure=static_closure,
         )
         # Re-coarsen the destination OFV too.
         _, arrs2 = coarsen(grid, planning_xy_m=cx, planning_z_m=cz, ofv=dst_ofv)
@@ -187,6 +194,10 @@ def _planner_inputs_from_disk(
             density=arrs["density"],
             ofv_start=arrs["ofv"].astype(bool) if arrs["ofv"] is not None else None,
             ofv_end=arrs2["ofv"].astype(bool) if arrs2["ofv"] is not None else None,
+            static_closure=(
+                arrs["static_closure"].astype(bool)
+                if arrs["static_closure"] is not None else None
+            ),
         )
     else:
         inputs = PlannerInputs(
@@ -198,6 +209,7 @@ def _planner_inputs_from_disk(
             density=density,
             ofv_start=src_ofv.astype(bool) if src_ofv is not None else None,
             ofv_end=dst_ofv.astype(bool) if dst_ofv is not None else None,
+            static_closure=static_closure.astype(bool) if static_closure is not None else None,
         )
 
     meta = {
@@ -246,9 +258,15 @@ def plan_corridor(
     src_xyz = vertiport_anchor_enu(inputs.frame, vert_cfg[vertiport_src])
     dst_xyz = vertiport_anchor_enu(inputs.frame, vert_cfg[vertiport_dst])
 
-    # OFV-aware snapping.
+    # OFV-aware snapping. For B2 we also exclude voxels inside the both-sides-closed
+    # runway corridor so the planner doesn't land its endpoint somewhere the search will
+    # immediately reject; for B3/B4 the time-varying envelope (rather than static closure)
+    # gates the runway corridors.
     src_mask = (inputs.sdf > 0) & (inputs.ofv_start if inputs.ofv_start is not None else True)
     dst_mask = (inputs.sdf > 0) & (inputs.ofv_end if inputs.ofv_end is not None else True)
+    if baseline == "B2" and inputs.static_closure is not None:
+        src_mask = src_mask & (~inputs.static_closure)
+        dst_mask = dst_mask & (~inputs.static_closure)
     try:
         src_ijk = snap_to_voxel(inputs.grid, x_m=src_xyz[0], y_m=src_xyz[1], z_m=src_xyz[2], mask=src_mask)
         dst_ijk = snap_to_voxel(inputs.grid, x_m=dst_xyz[0], y_m=dst_xyz[1], z_m=dst_xyz[2], mask=dst_mask)

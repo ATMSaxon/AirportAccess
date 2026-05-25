@@ -4,7 +4,10 @@ These tests use small fixture data + monkeypatched HTTP; no internet required.
 """
 from __future__ import annotations
 
+import gzip
+import io
 import json
+import tarfile
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -14,7 +17,7 @@ import pandas as pd
 import pytest
 
 from src.data import (
-    source_bts, source_faa_dof, source_faa_nasr, source_lawa,
+    source_adsblol, source_bts, source_faa_dof, source_faa_nasr, source_lawa,
     source_noaa_wx, source_opensky, source_osm, source_usgs_3dep,
 )
 from src.data._common import bbox_around_arp, great_circle_nm
@@ -258,6 +261,155 @@ def test_bts_normalise_minimal():
                                 "market_fare", "market_distance"}
     assert out["passengers"].sum() == 3
     assert out["market_fare"].iloc[0] == pytest.approx(350.5)
+
+
+# --------------------------------------------------------------------------- #
+# Dtype-pin: time_utc resolution across acquisition modules.
+#
+# Background: traffic-engineer hit `pandas.errors.MergeError: incompatible merge
+# keys [0] datetime64[ns, UTC] and datetime64[us, UTC]` during envelope build
+# when ADS-B (from `source_adsblol`) was merge_asof'd with METAR (from
+# `source_noaa_wx`). The local fix lives in `src/traffic/adsb_clean.py`
+# (`_derive_geometric_altitude`) which now casts both sides to `[ns, UTC]`
+# before the merge. These tests lock the upstream contract so that any future
+# pyarrow / adsb.lol / IEM format shift that silently changes resolution
+# shows up here in CI rather than as a runtime MergeError downstream.
+#
+# Empirical note: the in-memory dtype of `source_adsblol._extract_and_filter`
+# is environment-sensitive. Local dev (pandas 2.3 + pyarrow 23) yields
+# `datetime64[ns, UTC]` in-memory and after parquet round-trip. The Featurize
+# GPU box yields `datetime64[us, UTC]` for the same code on the same parquet —
+# pyarrow version dependent. The downstream merge_asof normaliser handles
+# both, but a silent shift to a coarser resolution (s, ms) would silently lose
+# information; this test guards against that.
+# --------------------------------------------------------------------------- #
+def _make_adsblol_synthetic_tar(tmp_path: Path) -> Path:
+    """1-member tar with a gzipped readsb trace JSON inside the KLAX bbox."""
+    # Two consecutive state-vectors centred on the KLAX ARP.
+    trace = {
+        "icao": "abc123",
+        "r": "TEST1",
+        "timestamp": 1722556800,                       # 2024-08-02 00:00:00 UTC
+        "trace": [
+            # [t_off_s, lat, lon, alt_ft, gs, track, flags, vr_fpm]
+            [0.0,  33.9425, -118.4081, 1000.0, 80.0, 270.0, 0, -200.0],
+            [10.0, 33.9430, -118.4080, 1050.0, 82.0, 270.0, 0, -150.0],
+        ],
+    }
+    payload = gzip.compress(json.dumps(trace).encode("utf-8"))
+    tar_path = tmp_path / "v2024.08.02-planes-readsb.tar"
+    with tarfile.open(tar_path, "w") as tf:
+        info = tarfile.TarInfo(name="traces/23/trace_full_abc123.json")
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+    return tar_path
+
+
+def test_adsblol_time_utc_dtype_pin(klax_cfg, tmp_path):
+    """`source_adsblol._extract_and_filter` must emit a tz-aware UTC datetime column.
+
+    Locks the contract that the downstream `adsb_clean._derive_geometric_altitude`
+    merge_asof expects: UTC tz, datetime64 of some resolution.
+    """
+    from src.utils.crs import AirportFrame
+
+    tar_path = _make_adsblol_synthetic_tar(tmp_path)
+    frame = AirportFrame.from_cfg(klax_cfg)
+    bbox = source_adsblol._wgs_bbox_from_arp(frame, source_adsblol._DEFAULT_RADIUS_NM)
+    arp_elev_m = float(klax_cfg["arp"]["elev_m"])
+
+    df = source_adsblol._extract_and_filter(tar_path, bbox, frame, arp_elev_m, "2024-08-02")
+    assert not df.empty, "synthetic trace inside KLAX bbox should produce rows"
+    assert "time_utc" in df.columns
+
+    # Contract: tz-aware UTC, datetime64-dtype.
+    assert pd.api.types.is_datetime64_any_dtype(df["time_utc"]), (
+        f"time_utc must be a pandas datetime64 dtype; got {df['time_utc'].dtype}"
+    )
+    assert df["time_utc"].dt.tz is not None, "time_utc must be tz-aware"
+    assert str(df["time_utc"].dt.tz) == "UTC", (
+        f"time_utc tz must be UTC; got {df['time_utc'].dt.tz}"
+    )
+    # Resolution must be one that the downstream merge_asof normaliser accepts
+    # (it casts to ns; ms / us / ns are all losslessly castable, s is not since
+    # `t_off` can be sub-second from readsb). Guard against a silent regression
+    # to second-resolution.
+    assert df["time_utc"].dtype.unit in ("ms", "us", "ns"), (
+        f"time_utc resolution {df['time_utc'].dtype.unit!r} would lose sub-second precision "
+        f"from readsb trace points. Expected ms/us/ns."
+    )
+
+    # Round-trip via parquet — this is what envelope build actually reads.
+    pq = tmp_path / "adsb_2024-08-02.parquet"
+    df.to_parquet(pq, compression="zstd", index=False)
+    df2 = pd.read_parquet(pq)
+    assert pd.api.types.is_datetime64_any_dtype(df2["time_utc"])
+    assert str(df2["time_utc"].dt.tz) == "UTC"
+    assert df2["time_utc"].dtype.unit in ("ms", "us", "ns")
+
+
+def test_noaa_wx_metar_time_utc_dtype_ns_pin():
+    """`source_noaa_wx._normalise_metar_df` must emit `datetime64[ns, UTC]` for every
+    upstream time-column variant.
+
+    Branches exercised:
+      1. Pre-parsed UTC-aware datetime64 (ASOS archive path post-fix).
+      2. Pre-parsed naive datetime64 (legacy ASOS path).
+      3. Numeric epoch seconds (AWC `obsTime`).
+      4. ISO-string `valid` column (IEM raw CSV).
+      5. Empty input (must still expose a `time_utc` column).
+    """
+    raw_ob = "KLAX 020053Z 24008KT 10SM CLR 19/14 A2992"
+
+    # Branch 1: tz-aware datetime64
+    df1 = pd.DataFrame({
+        "icaoId": ["KLAX"],
+        "time_utc": pd.to_datetime(["2024-08-02 00:53:00Z"]),
+        "rawOb": [raw_ob],
+    })
+    out1 = source_noaa_wx._normalise_metar_df(df1)
+    assert pd.api.types.is_datetime64_any_dtype(out1["time_utc"])
+    assert out1["time_utc"].dtype.unit == "ns", (
+        f"branch 1 (tz-aware datetime64): expected ns, got {out1['time_utc'].dtype.unit}"
+    )
+    assert str(out1["time_utc"].dt.tz) == "UTC"
+
+    # Branch 2: naive datetime64 (must be promoted to UTC ns)
+    df2 = pd.DataFrame({
+        "icaoId": ["KLAX"],
+        "time_utc": pd.to_datetime(["2024-08-02 00:53:00"]),
+        "rawOb": [raw_ob],
+    })
+    out2 = source_noaa_wx._normalise_metar_df(df2)
+    assert out2["time_utc"].dtype.unit == "ns"
+    assert str(out2["time_utc"].dt.tz) == "UTC"
+
+    # Branch 3: AWC obsTime (epoch seconds, numeric).
+    # 1722559980 = 2024-08-02 00:53:00 UTC.
+    df3 = pd.DataFrame({
+        "icaoId": ["KLAX"],
+        "obsTime": [1722559980],
+        "rawOb": [raw_ob],
+    })
+    out3 = source_noaa_wx._normalise_metar_df(df3)
+    assert out3["time_utc"].dtype.unit == "ns"
+    assert str(out3["time_utc"].dt.tz) == "UTC"
+    assert out3["time_utc"].iloc[0] == pd.Timestamp("2024-08-02 00:53:00", tz="UTC")
+
+    # Branch 4: IEM `valid` ISO strings
+    df4 = pd.DataFrame({
+        "icaoId": ["KLAX"],
+        "valid": ["2024-08-02 00:53"],
+        "rawOb": [raw_ob],
+    })
+    out4 = source_noaa_wx._normalise_metar_df(df4)
+    assert out4["time_utc"].dtype.unit == "ns"
+    assert str(out4["time_utc"].dt.tz) == "UTC"
+
+    # Branch 5: empty input
+    out5 = source_noaa_wx._normalise_metar_df(pd.DataFrame())
+    assert "time_utc" in out5.columns
+    assert out5.empty
 
 
 # --------------------------------------------------------------------------- #

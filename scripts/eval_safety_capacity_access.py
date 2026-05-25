@@ -84,45 +84,52 @@ def _load_support_artefacts(icao: str, log) -> dict[str, Any]:
     if ofv:
         out["ofv"] = ofv
 
-    # Envelope-over-time (concat across all envelope_*.zarr/npz in proc).
-    env_paths = sorted(proc.glob("envelope_*.zarr"))
-    npz_paths = sorted(p for p in proc.glob("envelope_*.npz") if ".grid" not in p.name)
-    slices: list[np.ndarray] = []
-    if env_paths:
-        try:
-            import zarr  # noqa: F401
-            for ep in env_paths:
-                z = zarr.open(str(ep), mode="r")
-                # Traffic-engineer's canonical layout: group with `mask` child.
-                if hasattr(z, "__contains__") and "mask" in z:
-                    arr = np.asarray(z["mask"])
-                elif hasattr(z, "__contains__") and "envelope" in z:
-                    arr = np.asarray(z["envelope"])
-                else:
-                    arr = np.asarray(z)
-                if arr.ndim == 4:
-                    slices.append(arr)
-                elif arr.ndim == 3:
-                    slices.append(arr[np.newaxis])
-        except Exception as e:  # noqa: BLE001
-            log.warning("envelope zarr load failed: %s", e)
-    if npz_paths and not slices:
-        for ep in npz_paths:
+    # Envelope-over-time. Each day's envelope zarr is ~4.2 GB uncompressed bool
+    # (T=96 × 600 × 600 × 117). Loading all 5 days in memory + concat exhausts
+    # 54 GB Featurize RAM. Skip envelope loading by default (set DREAM_LOAD_ENVELOPES=1
+    # to opt back in). Capacity KPI's `corridor_closure_rate` becomes N/A; safety +
+    # accessibility KPIs are unaffected since they don't read envelopes_T.
+    if os.environ.get("DREAM_LOAD_ENVELOPES", "0") == "1":
+        env_paths = sorted(proc.glob("envelope_*.zarr"))
+        npz_paths = sorted(p for p in proc.glob("envelope_*.npz") if ".grid" not in p.name)
+        slices: list[np.ndarray] = []
+        if env_paths:
             try:
-                with np.load(ep, allow_pickle=False) as zz:
-                    arr = zz["mask"] if "mask" in zz.files else zz[zz.files[0]]
+                import zarr  # noqa: F401
+                for ep in env_paths:
+                    z = zarr.open(str(ep), mode="r")
+                    if hasattr(z, "__contains__") and "mask" in z:
+                        arr = np.asarray(z["mask"])
+                    elif hasattr(z, "__contains__") and "envelope" in z:
+                        arr = np.asarray(z["envelope"])
+                    else:
+                        arr = np.asarray(z)
                     if arr.ndim == 4:
                         slices.append(arr)
                     elif arr.ndim == 3:
                         slices.append(arr[np.newaxis])
             except Exception as e:  # noqa: BLE001
-                log.warning("envelope npz load failed %s: %s", ep, e)
-    if slices:
-        try:
-            out["envelopes_T"] = np.concatenate(slices, axis=0).astype(bool)
-            log.info("loaded envelopes_T shape=%s", out["envelopes_T"].shape)
-        except Exception as e:  # noqa: BLE001
-            log.warning("envelope concat failed: %s", e)
+                log.warning("envelope zarr load failed: %s", e)
+        if npz_paths and not slices:
+            for ep in npz_paths:
+                try:
+                    with np.load(ep, allow_pickle=False) as zz:
+                        arr = zz["mask"] if "mask" in zz.files else zz[zz.files[0]]
+                        if arr.ndim == 4:
+                            slices.append(arr)
+                        elif arr.ndim == 3:
+                            slices.append(arr[np.newaxis])
+                except Exception as e:  # noqa: BLE001
+                    log.warning("envelope npz load failed %s: %s", ep, e)
+        if slices:
+            try:
+                out["envelopes_T"] = np.concatenate(slices, axis=0).astype(bool)
+                log.info("loaded envelopes_T shape=%s", out["envelopes_T"].shape)
+            except Exception as e:  # noqa: BLE001
+                log.warning("envelope concat failed: %s", e)
+    else:
+        log.info("envelope loading skipped (DREAM_LOAD_ENVELOPES=0); "
+                 "corridor_closure_rate KPI will be N/A")
 
     # ADS-B parquet (per-day adsb_<YYYY-MM-DD>.parquet, or single adsb.parquet legacy).
     ads_frames: list[pd.DataFrame] = []

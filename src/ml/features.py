@@ -111,6 +111,53 @@ def _join_metar(times: pd.Series, metar_df: pd.DataFrame | None) -> pd.DataFrame
 # ---------------------------------------------------------------------------
 # Feature engineering for a counterfactual segment table
 # ---------------------------------------------------------------------------
+def _build_fast_density_fn(adsb_df: pd.DataFrame,
+                           half_xy_m: float = 1500.0,
+                           half_z_m: float = 150.0,
+                           half_t_s: float = 300.0):
+    """Precompute sorted ADS-B arrays once; return a closure that answers
+    density queries via ``np.searchsorted`` + vectorised xyz mask.
+
+    Roughly 50-200× faster than `adsb_density_box` on multi-day ADS-B
+    (which scans the whole DataFrame per call). Kept compatible with the
+    ``density_fn(x, y, z, mt) -> float`` interface used in `extract_features`.
+    """
+    a = adsb_df.dropna(subset=["time_utc", "x_m", "y_m", "z_msl_m"])
+    if len(a) == 0:
+        return lambda x, y, z, mt: 0.0
+    a = a.sort_values("time_utc").reset_index(drop=True)
+    t_utc = pd.to_datetime(a["time_utc"], utc=True)
+    if t_utc.dt.tz is not None:
+        t_utc = t_utc.dt.tz_convert("UTC").dt.tz_localize(None)
+    adsb_t = t_utc.to_numpy(dtype="datetime64[ns]")
+    adsb_x = a["x_m"].to_numpy(dtype=np.float64)
+    adsb_y = a["y_m"].to_numpy(dtype=np.float64)
+    adsb_z = a["z_msl_m"].to_numpy(dtype=np.float64)
+    half_t = np.timedelta64(int(half_t_s), "s")
+    vol = (2 * half_xy_m) ** 2 * (2 * half_z_m)
+    dt_window = 2 * half_t_s
+    denom = vol * dt_window + 1e-12
+
+    def density_fn(x: float, y: float, z: float, mt) -> float:
+        t = pd.Timestamp(mt)
+        if t.tzinfo is not None:
+            t = t.tz_convert("UTC").tz_localize(None)
+        t64 = np.datetime64(t.to_datetime64(), "ns")
+        i_lo = int(np.searchsorted(adsb_t, t64 - half_t, side="left"))
+        i_hi = int(np.searchsorted(adsb_t, t64 + half_t, side="right"))
+        if i_hi <= i_lo:
+            return 0.0
+        xx = adsb_x[i_lo:i_hi]
+        yy = adsb_y[i_lo:i_hi]
+        zz = adsb_z[i_lo:i_hi]
+        m = ((np.abs(xx - x) < half_xy_m)
+             & (np.abs(yy - y) < half_xy_m)
+             & (np.abs(zz - z) < half_z_m))
+        return float(m.sum()) / denom
+
+    return density_fn
+
+
 def extract_features(seg_df: pd.DataFrame, geom: AirportGeom,
                      adsb_df: pd.DataFrame | None = None,
                      metar_df: pd.DataFrame | None = None,
@@ -124,6 +171,12 @@ def extract_features(seg_df: pd.DataFrame, geom: AirportGeom,
         lambda L: [s for s in L if s])
     departures = seg_df["active_departures"].astype(str).str.split(";").apply(
         lambda L: [s for s in L if s])
+
+    # Fast spatial+temporal ADS-B index — built once, queried per-segment.
+    # Avoids the O(N) pandas filter inside `adsb_density_box` on every call,
+    # which dominates runtime for multi-day ADS-B (5M+ rows × 200k segs).
+    if density_fn is None and adsb_df is not None and len(adsb_df) > 0:
+        density_fn = _build_fast_density_fn(adsb_df)
 
     for i, row in seg_df.reset_index(drop=True).iterrows():
         x, y, z = float(row["mid_x_m"]), float(row["mid_y_m"]), float(row["mid_z_m"])

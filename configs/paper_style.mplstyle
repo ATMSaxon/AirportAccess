@@ -1,24 +1,57 @@
-# Matplotlib style for TR Part C-ready figures.
+# Publication-grade matplotlib style for DREAM (TR Part C / elsarticle).
+# Latin Modern Roman to match elsarticle body; viridis-based palette; vector-only output.
+
+# Fonts
 font.family: serif
-font.serif: Times New Roman, DejaVu Serif, serif
+font.serif: Latin Modern Roman, Computer Modern Roman, Times New Roman, DejaVu Serif, serif
 font.size: 9
-axes.labelsize: 9
+mathtext.fontset: cm
 axes.titlesize: 10
+axes.labelsize: 9
 xtick.labelsize: 8
 ytick.labelsize: 8
 legend.fontsize: 8
 legend.frameon: False
+legend.handlelength: 1.5
+
+# Figure size — elsarticle single-column = 3.5 in, two-column = 7.16 in
+figure.figsize: 3.5, 2.6
 figure.dpi: 150
 savefig.dpi: 300
 savefig.bbox: tight
 savefig.pad_inches: 0.02
-axes.linewidth: 0.8
-xtick.major.width: 0.6
-ytick.major.width: 0.6
-xtick.major.size: 3
-ytick.major.size: 3
-lines.linewidth: 1.2
-lines.markersize: 4
-grid.linewidth: 0.4
+savefig.format: pdf
+
+# Axes
+axes.linewidth: 0.7
+axes.grid: True
 grid.alpha: 0.3
+grid.linestyle: :
+grid.linewidth: 0.4
+
+# Ticks
+xtick.major.width: 0.5
+xtick.major.size: 3
+xtick.minor.width: 0.3
+xtick.minor.size: 1.5
+ytick.major.width: 0.5
+ytick.major.size: 3
+ytick.minor.width: 0.3
+ytick.minor.size: 1.5
+xtick.direction: in
+ytick.direction: in
+
+# Lines + markers
+lines.linewidth: 1.0
+lines.markersize: 3.5
+
+# Colorblind-safe 6-color palette inspired by viridis sampling
+axes.prop_cycle: cycler(color=['440154','3b528b','21918c','5ec962','fde725','ff7f0e'])
+
+# Images / heatmaps
 image.cmap: viridis
+image.interpolation: nearest
+
+# PDF fonts must be embedded as Type 3 for some publishers; modern is fine
+pdf.fonttype: 42
+ps.fonttype: 42

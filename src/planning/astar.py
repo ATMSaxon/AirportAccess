@@ -134,7 +134,8 @@ class PlannerInputs:
     """All planning inputs in one bundle.
 
     Arrays must share the same shape as ``grid.shape``. ``envelope``, ``risk``, ``density``,
-    ``ofv_start``, ``ofv_end`` may be ``None`` to disable the corresponding feature.
+    ``ofv_start``, ``ofv_end``, ``static_closure`` may be ``None`` to disable the
+    corresponding feature.
     """
 
     grid: VoxelGrid
@@ -145,6 +146,8 @@ class PlannerInputs:
     density: Optional[np.ndarray] = None  # float32 (nx,ny,nz), people·s per voxel (proxy)
     ofv_start: Optional[np.ndarray] = None  # bool (nx,ny,nz)
     ofv_end: Optional[np.ndarray] = None    # bool (nx,ny,nz)
+    # Pessimistic both-sides-closed runway corridor mask (B2 only). True = closed.
+    static_closure: Optional[np.ndarray] = None  # bool (nx,ny,nz)
     source: str = "real"                  # "real" or "synthetic"
 
 
@@ -211,9 +214,22 @@ class Corridor:
 
 @dataclass
 class _BaselineGate:
-    """Which masks/cost terms are active for a given baseline."""
+    """Which masks/cost terms are active for a given baseline.
+
+    The ``use_static_closure`` flag is what distinguishes B2 from B3 substantively:
+
+    * B2 uses the pessimistic both-sides-closed runway corridor mask (``static_closure``);
+      A_static = (sdf > 0) & ~static_closure.
+    * B3 uses the time-varying envelope which opens whichever side is downwind/inactive
+      for the 15-minute slice; A_static_B3 = (sdf > 0) & envelope[t].
+    * B4 = B3 + risk cost term.
+
+    Without this, B3 ⊆ B2 by construction (envelope only ever subtracts voxels), and the
+    DREAM H3 win (B3 succeeds where B2 fails for V3-rooftop pairs) can't manifest.
+    """
     use_a_static: bool
     use_envelope: bool
+    use_static_closure: bool
     alpha_T: float
     alpha_E: float
     alpha_rho: float
@@ -223,14 +239,16 @@ class _BaselineGate:
 
 def _baseline_gate(cfg: PlannerConfig, baseline: str) -> _BaselineGate:
     if baseline == "B1":
-        return _BaselineGate(False, False, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return _BaselineGate(False, False, False, 0.0, 0.0, 0.0, 0.0, 0.0)
     if baseline == "B2":
-        return _BaselineGate(True, False, cfg.alpha_T, cfg.alpha_E, 0.0, cfg.alpha_N, 0.0)
+        # Pessimistic: both parallel runway corridors closed regardless of wind config.
+        return _BaselineGate(True, False, True, cfg.alpha_T, cfg.alpha_E, 0.0, cfg.alpha_N, 0.0)
     if baseline == "B3":
-        return _BaselineGate(True, True, cfg.alpha_T, cfg.alpha_E, 0.0, cfg.alpha_N, cfg.alpha_I)
+        # Active-side envelope from the runway-configuration solver; no static closure.
+        return _BaselineGate(True, True, False, cfg.alpha_T, cfg.alpha_E, 0.0, cfg.alpha_N, cfg.alpha_I)
     if baseline == "B4":
         return _BaselineGate(
-            True, True, cfg.alpha_T, cfg.alpha_E, cfg.alpha_rho, cfg.alpha_N, cfg.alpha_I
+            True, True, False, cfg.alpha_T, cfg.alpha_E, cfg.alpha_rho, cfg.alpha_N, cfg.alpha_I
         )
     raise ValueError(f"baseline {baseline!r} is not a planner baseline (B0 handled upstream)")
 
@@ -380,6 +398,7 @@ class Planner:
         # Reject obviously-bad endpoints up-front.
         sdf = self.inputs.sdf
         envelope = self.inputs.envelope
+        static_closure = self.inputs.static_closure
         if gate.use_a_static and sdf[start_ijk] <= 0:
             return self._infeasible(baseline, vertiport_pair, date, hour,
                                     f"start voxel {start_ijk} not in A_static (sdf={sdf[start_ijk]:.1f})")
@@ -393,6 +412,13 @@ class Planner:
             if not envelope[end_ijk]:
                 return self._infeasible(baseline, vertiport_pair, date, hour,
                                         f"end voxel {end_ijk} blocked by envelope")
+        if gate.use_static_closure and static_closure is not None:
+            if bool(static_closure[start_ijk]):
+                return self._infeasible(baseline, vertiport_pair, date, hour,
+                                        f"start voxel {start_ijk} inside both-sides closed runway corridor")
+            if bool(static_closure[end_ijk]):
+                return self._infeasible(baseline, vertiport_pair, date, hour,
+                                        f"end voxel {end_ijk} inside both-sides closed runway corridor")
 
         # A* state
         # f-score heap entries: (f, counter, i, j, k, prev_dir_idx).
@@ -452,8 +478,10 @@ class Planner:
                     shape=shape,
                     sdf=sdf,
                     envelope=envelope,
+                    static_closure=static_closure,
                     use_a_static=gate.use_a_static,
                     use_envelope=gate.use_envelope,
+                    use_static_closure=gate.use_static_closure,
                     dz_m=dz_m,
                     edge_dt_s=edge_dt,
                     max_climb_rate_mps=max_climb,
