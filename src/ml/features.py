@@ -73,9 +73,17 @@ def _join_metar(times: pd.Series, metar_df: pd.DataFrame | None) -> pd.DataFrame
     if metar_df is None or len(metar_df) == 0:
         return out
     m = metar_df.copy()
-    if not pd.api.types.is_datetime64_any_dtype(m["time_utc"]):
+    # Force tz-aware UTC; ASOS source writes naive datetime64[ns] with possible NaT rows.
+    if pd.api.types.is_datetime64_any_dtype(m["time_utc"]):
+        if m["time_utc"].dt.tz is None:
+            m["time_utc"] = m["time_utc"].dt.tz_localize("UTC")
+        else:
+            m["time_utc"] = m["time_utc"].dt.tz_convert("UTC")
+    else:
         m["time_utc"] = pd.to_datetime(m["time_utc"], utc=True)
-    m = m.sort_values("time_utc").reset_index(drop=True)
+    m = m.dropna(subset=["time_utc"]).sort_values("time_utc").reset_index(drop=True)
+    if len(m) == 0:
+        return out
 
     t = pd.to_datetime(times.to_numpy(), utc=True)
     idx = np.searchsorted(m["time_utc"].to_numpy(), t)

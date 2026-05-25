@@ -132,11 +132,12 @@ def fetch(airport_cfg: dict, window: str, out_dir: Path) -> FetchResult:
 
     status = "ok" if files_written else "offline"
     return FetchResult(
+        name="adsblol",
         status=status,
         files=[p.name for p in files_written],
-        params={"window": window, "radius_nm": _DEFAULT_RADIUS_NM,
-                "dates_ok": [d for d in dates if d not in offline_days],
-                "dates_offline": offline_days},
+        extra={"window": window, "radius_nm": _DEFAULT_RADIUS_NM,
+               "dates_ok": [d for d in dates if d not in offline_days],
+               "dates_offline": offline_days},
     )
 
 
@@ -173,6 +174,8 @@ def _ensure_tar(date: str) -> Path:
     """Return path to a concatenated .tar for the given ``YYYY-MM-DD`` date.
 
     Idempotent: re-uses cached .tar.aa / .tar.ab parts; only concatenates once.
+    Avoids the GitHub API when the parts are already on disk (unauthenticated
+    GitHub API is heavily rate-limited).
     """
     year = date.split("-")[0]
     tag_date = date.replace("-", ".")
@@ -182,6 +185,31 @@ def _ensure_tar(date: str) -> Path:
     if full_tar.exists() and full_tar.stat().st_size > 100 * 1024 * 1024:
         LOG.info("adsblol: reusing %s (%.1f GB)", full_tar.name,
                  full_tar.stat().st_size / 1e9)
+        return full_tar
+
+    # First, see if .tar.aa / .tar.ab / .tar are already on disk (downloaded
+    # out-of-band, e.g. via parallel curl on the GPU box). If so, concatenate
+    # without ever calling the GitHub API.
+    cached_parts = sorted(
+        p for p in cache_dir.iterdir()
+        if p.name.startswith(f"v{tag_date}-planes-readsb-") and (
+            p.suffix in (".tar",) or p.name.endswith(".tar.aa") or p.name.endswith(".tar.ab")
+            or p.name.endswith(".tar.ac") or p.name.endswith(".tar.ad")
+        )
+    )
+    if cached_parts and sum(p.stat().st_size for p in cached_parts) > 100 * 1024 * 1024:
+        LOG.info("adsblol: found %d cached part(s), concatenating without GitHub API",
+                 len(cached_parts))
+        with full_tar.open("wb") as outf:
+            for p in cached_parts:
+                with p.open("rb") as inf:
+                    while True:
+                        chunk = inf.read(1 << 20)
+                        if not chunk:
+                            break
+                        outf.write(chunk)
+        LOG.info("adsblol: concatenated %d parts → %s (%.1f GB)",
+                 len(cached_parts), full_tar.name, full_tar.stat().st_size / 1e9)
         return full_tar
 
     last_err: Exception | None = None

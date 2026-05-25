@@ -77,11 +77,18 @@ def _load_metar(airport: str, date: str) -> pd.DataFrame | None:
         log.warning("metar parquet unreadable: %s", e)
         return None
     if "time_utc" in m.columns:
-        if not pd.api.types.is_datetime64_any_dtype(m["time_utc"]):
+        # Force tz-aware UTC. ASOS source ships naive datetime64[ns].
+        if pd.api.types.is_datetime64_any_dtype(m["time_utc"]):
+            if m["time_utc"].dt.tz is None:
+                m["time_utc"] = m["time_utc"].dt.tz_localize("UTC")
+            else:
+                m["time_utc"] = m["time_utc"].dt.tz_convert("UTC")
+        else:
             m["time_utc"] = pd.to_datetime(m["time_utc"], utc=True)
+        m = m.dropna(subset=["time_utc"])
         d0 = pd.Timestamp(date, tz="UTC")
-        m = m[(m["time_utc"] >= d0 - pd.Timedelta("1d")) &
-              (m["time_utc"] < d0 + pd.Timedelta("2d"))]
+        m = m[(m["time_utc"] >= d0 - pd.Timedelta("1D")) &
+              (m["time_utc"] < d0 + pd.Timedelta("2D"))]
     return m
 
 

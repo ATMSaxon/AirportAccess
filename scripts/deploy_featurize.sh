@@ -12,7 +12,7 @@ set -euo pipefail
 
 FEATURIZE_USER="${FEATURIZE_USER:-featurize}"
 FEATURIZE_HOST="${FEATURIZE_HOST:-workspace.featurize.cn}"
-FEATURIZE_PORT="${FEATURIZE_PORT:-27749}"
+FEATURIZE_PORT="${FEATURIZE_PORT:-57925}"
 REMOTE_DIR="${REMOTE_DIR:-/home/featurize/work/airportaccess}"
 
 if [[ -z "${FEATURIZE_PASS:-}" ]]; then
